@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Darkslide">
+<meta name="theme-color" content="#0e0e0d">
+<meta name="description" content="An interval camera with film camera looks that runs in Safari.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="preload" href="fonts/plex-mono-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="css/app.css">
+<title>Darkslide</title>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-flash" viewBox="0 0 24 24"><path d="M13 3 5 13.5h6L10 21l8-10.5h-6z"/></symbol>
+    <symbol id="i-timer" viewBox="0 0 24 24"><circle cx="12" cy="13.5" r="7.5"/><path d="M12 9.5v4l2.5 1.5M10 3h4"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></symbol>
+    <symbol id="i-flip" viewBox="0 0 24 24"><path d="M4.5 10a8 8 0 0 1 14.3-3.5M19 3.5v3.5h-3.5M19.5 14a8 8 0 0 1-14.3 3.5M5 20.5V17h3.5"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M5 12a7 7 0 1 0 2-5M7 3v4h4"/></symbol>
+  </defs>
+</svg>
+
+<main id="cam" class="cam">
+  <header class="top">
+    <button id="flashBtn" class="ic" aria-label="Flash"><svg><use href="#i-flash"/></svg><span class="tag" id="flashTag">off</span></button>
+    <button id="timerBtn" class="ic" aria-label="Self-timer"><svg><use href="#i-timer"/></svg><span class="tag" id="timerTag">off</span></button>
+    <button id="lookBtn" class="look" aria-label="Choose camera look"><img id="lookImg" alt=""><span id="lookName">Digital</span></button>
+    <button id="setBtn" class="ic" aria-label="Settings"><svg><use href="#i-sliders"/></svg></button>
+  </header>
+  <div class="readout mono" id="readout">
+    <span id="roRes">starting</span><span id="roZoom">1.0×</span><span id="roEv"></span><span id="roLeft"></span>
+  </div>
+
+  <div class="vf" id="vf">
+    <div class="frame" id="frame">
+      <canvas id="preview"></canvas>
+      <svg class="grid" id="grid" viewBox="0 0 300 300" preserveAspectRatio="none"></svg>
+      <div class="level" id="level"><i></i></div>
+      <canvas class="histo" id="histo" width="128" height="40"></canvas>
+      <div class="countdown mono" id="countdown"></div>
+      <div class="hud mono" id="hud" hidden>
+        <div class="hud-row"><span class="rec"></span><b id="hudCount">0</b><span id="hudLeft"></span><span id="hudMissed"></span></div>
+        <div class="bar-track"><i id="hudBar"></i></div>
+        <button id="dimBtn" class="pill">dim screen</button>
+      </div>
+      <div class="blink" id="blink"></div>
+    </div>
+    <div class="lenses mono" id="lenses"></div>
+    <div class="vf-msg" id="vfMsg" hidden>
+      <p id="vfMsgText"></p>
+      <button id="retryBtn" class="pill">Try again</button>
+      <button id="demoBtn" class="pill">Use a test pattern</button>
+    </div>
+  </div>
+
+  <section class="dock">
+    <div class="ivl mono" id="ivl" hidden>
+      <div class="ivl-row"><span class="k">rate</span><button class="stp" data-k="every" data-d="-1" aria-label="Slower">‹</button><span class="v" id="ivEvery"></span><button class="stp" data-k="every" data-d="1" aria-label="Faster">›</button></div>
+      <div class="ivl-row"><button class="k kbtn" id="ivStopKind" aria-label="Change how the run stops">stop</button><button class="stp" data-k="stop" data-d="-1" aria-label="Less">‹</button><span class="v" id="ivStop"></span><button class="stp" data-k="stop" data-d="1" aria-label="More">›</button></div>
+      <div class="ivl-row"><span class="k">delay</span><button class="stp" data-k="delay" data-d="-1" aria-label="Shorter delay">‹</button><span class="v" id="ivDelay"></span><button class="stp" data-k="delay" data-d="1" aria-label="Longer delay">›</button></div>
+      <div class="ivl-row"><span class="k">capture</span><button class="v vbtn" id="ivMode"></button></div>
+      <p class="ivl-sum" id="ivSum"></p>
+    </div>
+    <nav class="modes mono" id="modes">
+      <button data-mode="photo">photo</button>
+      <button data-mode="interval">interval</button>
+    </nav>
+    <div class="shutter-row">
+      <button id="galBtn" class="last" aria-label="Open photos"><img id="lastImg" alt=""></button>
+      <button id="shutter" class="shutter" aria-label="Take photo"><i></i></button>
+      <button id="flipBtn" class="ic round" aria-label="Switch camera"><svg><use href="#i-flip"/></svg></button>
+    </div>
+  </section>
+  <video id="video" playsinline muted autoplay></video>
+</main>
+
+<div id="dim" class="mono" hidden><b id="dimCount"></b><span>tap to wake the screen</span></div>
+
+<section id="gallery" class="screen" hidden>
+  <header class="bar">
+    <button id="galClose" class="ic" aria-label="Back to camera"><svg><use href="#i-back"/></svg></button>
+    <h1>Photos</h1>
+    <span class="sp"></span>
+    <button id="galImport" class="txt">Import</button>
+    <button id="galSelect" class="txt">Select</button>
+  </header>
+  <div class="rolls" id="rolls"></div>
+  <footer class="selbar" id="selbar" hidden>
+    <span id="selCount" class="mono">0 selected</span>
+    <button id="selSave" class="txt">Save</button>
+    <button id="selLook" class="txt">Look</button>
+    <button id="selTl" class="txt">Timelapse</button>
+    <button id="selDel" class="txt danger">Delete</button>
+  </footer>
+</section>
+
+<section id="viewer" class="screen viewer" hidden>
+  <header class="bar">
+    <button id="vwClose" class="ic" aria-label="Back to photos"><svg><use href="#i-back"/></svg></button>
+    <span id="vwInfo" class="mono dim"></span>
+    <span class="sp"></span>
+    <span id="vwIdx" class="mono dim"></span>
+  </header>
+  <div class="stage" id="stage"></div>
+  <div class="editor" id="editor" hidden>
+    <nav class="tabs mono" id="edTabs">
+      <button data-tab="camera">camera</button><button data-tab="adjust">adjust</button><button data-tab="effects">effects</button><button data-tab="crop">crop</button>
+    </nav>
+    <div class="pane" data-pane="camera"><div class="cam-strip" id="edCams"></div></div>
+    <div class="pane" data-pane="adjust" id="edAdjust"></div>
+    <div class="pane" data-pane="effects" id="edFx"></div>
+    <div class="pane" data-pane="crop" id="edCrop"></div>
+    <div class="ed-actions">
+      <button id="edReset" class="txt">Reset</button>
+      <button id="edRoll" class="txt">Apply to roll</button>
+      <span class="sp"></span>
+      <button id="edDone" class="pill solid">Done</button>
+    </div>
+  </div>
+  <footer class="bar bottom" id="vwBar">
+    <button id="vwEdit" class="txt">Edit</button>
+    <button id="vwSave" class="txt">Save to Photos</button>
+    <button id="vwDel" class="txt danger">Delete</button>
+  </footer>
+</section>
+
+<dialog id="lookSheet" class="sheet">
+  <header class="sheet-head"><h2>Camera</h2><button class="ic" data-close aria-label="Close"><svg><use href="#i-x"/></svg></button></header>
+  <div class="cam-grid" id="camGrid"></div>
+  <h3 class="sub">Effects</h3>
+  <div id="camFx"></div>
+  <p class="note">These apply to new shots. You can change the camera and effects on any photo later from the gallery.</p>
+</dialog>
+
+<dialog id="setSheet" class="sheet">
+  <header class="sheet-head"><h2>Settings</h2><button class="ic" data-close aria-label="Close"><svg><use href="#i-x"/></svg></button></header>
+  <div id="setBody"></div>
+</dialog>
+
+<dialog id="saveSheet" class="sheet">
+  <header class="sheet-head"><h2 id="saveTitle">Save to Photos</h2><button class="ic" data-close aria-label="Close"><svg><use href="#i-x"/></svg></button></header>
+  <p class="mono dim" id="saveStatus"></p>
+  <div class="bar-track"><i id="saveBar"></i></div>
+  <button id="saveGo" class="pill solid wide" hidden></button>
+  <p class="note" id="saveNote">In the share sheet, pick “Save Images” to put them in your camera roll.</p>
+</dialog>
+
+<dialog id="tlSheet" class="sheet">
+  <header class="sheet-head"><h2>Timelapse</h2><button class="ic" data-close aria-label="Close"><svg><use href="#i-x"/></svg></button></header>
+  <div class="opt-row mono"><span class="k">speed</span><span class="seg" id="tlFps"><button data-v="12">12 fps</button><button data-v="24">24 fps</button><button data-v="30">30 fps</button></span></div>
+  <div class="opt-row mono"><span class="k">size</span><span class="seg" id="tlSize"><button data-v="720">720p</button><button data-v="1080">1080p</button><button data-v="2160">4K</button></span></div>
+  <p class="mono dim" id="tlInfo"></p>
+  <button id="tlGo" class="pill solid wide">Make video</button>
+</dialog>
+
+<dialog id="pickSheet" class="sheet">
+  <header class="sheet-head"><h2>Apply a camera</h2><button class="ic" data-close aria-label="Close"><svg><use href="#i-x"/></svg></button></header>
+  <div class="cam-grid" id="pickGrid"></div>
+</dialog>
+
+<div id="toast" class="toast" role="status"></div>
+<input type="file" id="importInput" accept="image/*" multiple hidden>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
