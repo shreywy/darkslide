@@ -12,11 +12,22 @@ export const RESOLUTIONS = [
 
 let stream = null;
 
+// applyConstraints replaces every constraint on the track, so a bare
+// { advanced: [{ zoom }] } silently dropped the resolution back to the default
+// (blurry after zooming). base and adv are resent together on every change.
+let base = {}, adv = {};
+const sizeOf = (res) => {
+  const r = RESOLUTIONS.find((x) => x.id === res) || RESOLUTIONS[0];
+  return { width: { ideal: r.w }, height: { ideal: r.h }, frameRate: { ideal: 30 } };
+};
+const send = () => track().applyConstraints({ ...base, advanced: Object.entries(adv).map(([k, v]) => ({ [k]: v })) });
+
 export async function start({ deviceId, facing = 'environment', res = 'max', demo = false } = {}) {
   stop();
+  base = sizeOf(res);
+  adv = {};
   if (demo) return (stream = demoStream());
-  const r = RESOLUTIONS.find((x) => x.id === res) || RESOLUTIONS[0];
-  const video = { width: { ideal: r.w }, height: { ideal: r.h }, frameRate: { ideal: 30 } };
+  const video = { ...base };
   if (deviceId) video.deviceId = { exact: deviceId };
   else video.facingMode = facing;
   try {
@@ -38,10 +49,12 @@ export const caps = () => track()?.getCapabilities?.() || {};
 export const current = () => track()?.getSettings?.() || {};
 
 export async function apply(c) {
+  Object.assign(adv, c);
   try {
-    await track().applyConstraints({ advanced: [c] });
+    await send();
     return true;
   } catch {
+    for (const k in c) delete adv[k];
     return false;
   }
 }
@@ -60,9 +73,9 @@ export async function lenses() {
 
 // Changes resolution on the running track, which avoids a new permission prompt.
 export async function resize(id) {
-  const r = RESOLUTIONS.find((x) => x.id === id) || RESOLUTIONS[0];
+  base = sizeOf(id);
   try {
-    await track().applyConstraints({ width: { ideal: r.w }, height: { ideal: r.h }, frameRate: { ideal: 30 } });
+    await send();
     return true;
   } catch {
     return false;

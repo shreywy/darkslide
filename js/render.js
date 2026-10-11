@@ -37,7 +37,7 @@ uniform vec2 texSize, crop, outSize, pix;
 uniform float angle, flip;
 uniform float ev, con, sat, warm, fade, xpro, mono, soft, cornerSoft, chroma, grainColor, palette;
 uniform vec3 lift, gain, mixw, leakColor;
-uniform float grain, vignette, halation, leak, dust, seed;
+uniform float grain, vignette, halation, leak, dust, seed, gseed;
 
 vec2 toSrc(vec2 q) {
   vec2 p = (q - .5) * crop * vec2(flip, 1.);
@@ -98,9 +98,9 @@ void main() {
   }
   if (grain > 0.) {
     vec2 g = v * outSize / sh * 1400.;
-    float n = vnoise(g + seed * 91.) + vnoise(g * 2.1 + seed * 37.) * .5 - .75;
+    float n = vnoise(g + gseed * 91.) + vnoise(g * 2.1 + gseed * 37.) * .5 - .75;
     vec3 nv = vec3(n);
-    if (grainColor > 0.) nv = mix(nv, (vec3(vnoise(g + seed * 13.), vnoise(g + seed * 29.), vnoise(g + seed * 53.)) - .5) * 1.4, grainColor);
+    if (grainColor > 0.) nv = mix(nv, (vec3(vnoise(g + gseed * 13.), vnoise(g + gseed * 29.), vnoise(g + gseed * 53.)) - .5) * 1.4, grainColor);
     float lum = dot(c, vec3(.299, .587, .114));
     c += nv * grain * .22 * sqrt(min(1., sh / 1400.)) * (1. - abs(lum - .5) * 1.2);
   }
@@ -254,6 +254,7 @@ export class Renderer {
     f('leakColor', ...(t.leakColor || [1, 0.4, 0.1]));
     f('grain', recipe.grain); f('vignette', recipe.vignette); f('halation', recipe.halation);
     f('leak', recipe.leak); f('dust', recipe.dust); f('seed', recipe.seed);
+    f('gseed', opts.grainSeed ?? recipe.seed); // the viewfinder passes a new one each frame so grain moves
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     return { ...P, ow, oh };
   }
@@ -341,8 +342,20 @@ function pool() {
   }));
 }
 
-const viaToBlob = (canvas, q) =>
-  new Promise((res, rej) => canvas.toBlob((b) => (b ? res(b) : rej(new Error('Could not encode JPEG'))), 'image/jpeg', q));
+// iOS caps total canvas memory and returns null from toBlob when it's hit, so
+// temporary canvases are shrunk to nothing as soon as they're done (release), and a
+// failed encode waits a moment for memory to free up and tries again.
+export const release = (...cs) => cs.forEach((c) => { if (c) c.width = c.height = 0; });
+
+const blobOnce = (canvas, q) => new Promise((res) => canvas.toBlob(res, 'image/jpeg', q));
+async function viaToBlob(canvas, q) {
+  for (let i = 0; i < 3; i++) {
+    const b = await blobOnce(canvas, q);
+    if (b) return b;
+    await new Promise((r) => setTimeout(r, 250 * (i + 1)));
+  }
+  throw new Error('the phone ran low on memory for photos. Try shooting a little slower');
+}
 
 export async function toJpeg(canvas, q = 0.92) {
   if (!useWorkers) return viaToBlob(canvas, q);
@@ -372,7 +385,9 @@ export async function renderShot(renderer, raw, shot, { maxLong = Infinity, fram
   const img = await decode(raw);
   const c = renderer.render(img, img.width, img.height, shot.recipe, { maxLong, aspect });
   img.close?.();
-  return compose(c, shot.recipe, { frame, date: date ? new Date(shot.t) : null });
+  const out = compose(c, shot.recipe, { frame, date: date ? new Date(shot.t) : null });
+  release(c);
+  return out;
 }
 
 // Small rendered preview for the gallery grid (look applied, no border or date).
@@ -381,5 +396,7 @@ export function makeThumb(src, w, h, recipe) {
   const small = Object.assign(document.createElement('canvas'), { width: Math.round(w * k), height: Math.round(h * k) });
   small.getContext('2d').drawImage(src, 0, 0, small.width, small.height);
   const c = offscreen().render(small, small.width, small.height, recipe, { maxLong: 360 });
-  return toJpeg(compose(c, recipe, { frame: false }), 0.8);
+  const out = compose(c, recipe, { frame: false });
+  release(small, c);
+  return toJpeg(out, 0.8).finally(() => release(out));
 }

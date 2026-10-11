@@ -1,6 +1,6 @@
 // Offline cache for the app shell. Bump VERSION when shipping changes so phones
 // pick up the new files on the next launch.
-const VERSION = 'darkslide-2';
+const VERSION = 'darkslide-3';
 const CAMS = ['funsaver', 'sx70', 'instax', 'ixus', 'm6', 'k1000', 'mju2', 'lca', 'holga', 'hassel', 'super8', 'gbcam', 'mavica', 'ae1', 't2', 'trip'];
 const FILES = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',

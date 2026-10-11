@@ -129,3 +129,43 @@ export function cameraCard(cam, selected) {
     + `<span class="cam-name">${cam.name}</span><span class="cam-film">${cam.film}</span>`;
   return b;
 }
+
+// Pinned cameras live in localStorage and float to the top of every camera list.
+const PIN_KEY = 'darkslide.pins';
+export function pins() {
+  try { return JSON.parse(localStorage.getItem(PIN_KEY)) || []; } catch { return []; }
+}
+function togglePin(id) {
+  const p = pins(), next = p.includes(id) ? p.filter((x) => x !== id) : [...p, id];
+  try { localStorage.setItem(PIN_KEY, JSON.stringify(next)); } catch {}
+}
+export const byPins = () => {
+  const p = pins();
+  return [...CAMERAS].sort((a, b) => (p.includes(b.id) ? 1 : 0) - (p.includes(a.id) ? 1 : 0));
+};
+
+// List of cameras with a pin button on each row. Rebuilds itself when pins change.
+export function cameraList(box, selected, onPick) {
+  const draw = () => {
+    const p = pins(), pinned = CAMERAS.filter((c) => p.includes(c.id)), rest = CAMERAS.filter((c) => !p.includes(c.id));
+    box.innerHTML = '';
+    box.className = 'cam-list';
+    const section = (title, list) => {
+      if (!list.length) return;
+      box.insertAdjacentHTML('beforeend', `<p class="cam-sec mono">${title}</p>`);
+      for (const c of list) {
+        const on = p.includes(c.id);
+        const row = document.createElement('div');
+        row.className = 'cam-row' + (c.id === selected ? ' on' : '');
+        row.innerHTML = `<button class="cam-pick">${c.id === 'digital' ? '<span class="cam-thumb cam-none">raw</span>' : `<img class="cam-thumb" src="cameras/${c.id}.jpg" alt="">`}<span class="cam-text"><b>${c.name}</b><small>${c.film}</small></span></button>`
+          + `<button class="pin${on ? ' on' : ''}" aria-pressed="${on}" aria-label="${on ? 'Unpin' : 'Pin'} ${c.name}"><svg><use href="#i-star"/></svg></button>`;
+        row.firstChild.onclick = () => { selected = c.id; onPick(c.id); draw(); };
+        row.lastChild.onclick = () => { togglePin(c.id); draw(); };
+        box.append(row);
+      }
+    };
+    section('pinned', pinned);
+    section(pinned.length ? 'all cameras' : 'cameras', rest);
+  };
+  draw();
+}

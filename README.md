@@ -56,7 +56,7 @@ Darkslide sends `{"every": 5, "count": 120, "delay": 3}` (seconds and shots). Th
 
 ![The 16 looks on the same photo](docs/looks.jpg)
 
-Tap the camera name at the top of the viewfinder to pick one. The viewfinder shows the look live. Each camera sets the color, contrast, softness and grain of the film or sensor it copies, and some change the format too: the SX-70 and Instax print with their white borders, the Super 8 frame has rounded gate corners, the Holga and Hasselblad shoot square, and the Game Boy Camera drops to 128×112 in four shades of green.
+Tap the camera name at the top of the viewfinder to pick one from the list. Tap the star on a camera to pin it, and pinned cameras stay at the top of the list, in the editor and in bulk restyling. The viewfinder shows the look live, grain included, which moves frame to frame like real film. Each camera sets the color, contrast, softness and grain of the film or sensor it copies, and some change the format too: the SX-70 and Instax print with their white borders, the Super 8 frame has rounded gate corners, the Holga and Hasselblad shoot square, and the Game Boy Camera drops to 128×112 in four shades of green.
 
 On top of any camera you can set grain, vignette, halation, light leaks and dust, and turn on an orange date imprint. The date imprint is drawn as seven-segment digits, like the ones on 90s point-and-shoots.
 
@@ -87,7 +87,7 @@ Auto level looks for the horizon and other straight edges, works out how far the
 - Level, using the motion sensor. The line shows when you're close to level, turns yellow when you are, and fades out when you're well off.
 - Live histogram
 - Zoom like the Camera app: tap .5, 1 or 2, or drag sideways across the numbers for a dial. On iPhones with an ultra wide it uses the multi-lens camera, so it moves between lenses as you zoom. Pinch works too.
-- Tap the viewfinder to meter exposure on that spot. Hold to lock it: a ring draws around your finger and an AE lock badge appears. Tap the badge or anywhere else to unlock.
+- Tap the viewfinder to meter exposure on that spot. Hold to lock it: a ring draws around your finger and an AE lock badge appears, and taps stop changing exposure until you tap the badge. Focus stays continuous.
 - Drag up or down on the viewfinder to adjust exposure
 - Flash: fires the torch on the back camera, lights the screen white on the front camera, or keeps the torch on
 - Self-timer: 3 or 10 seconds

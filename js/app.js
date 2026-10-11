@@ -1,6 +1,6 @@
 import { $, $$, el, prefs, toast, sheet, slider, toggle, fmtDuration, fmtBytes } from './dom.js';
 import * as cam from './camera.js';
-import { CAMERAS, camera, fxFor, newRecipe, cameraCard } from './looks.js';
+import { camera, fxFor, newRecipe, cameraList } from './looks.js';
 import { initRenderer, makeThumb, toJpeg, plan } from './render.js';
 import { totalShots, newRun, step, everyLabel } from './interval.js';
 import { addShot, allShots, allRolls, putRoll, newId } from './store.js';
@@ -83,7 +83,7 @@ function applyCaps() {
   $('#flashBtn').hidden = !(c.torch || isFront());
   if (S.flash === 'torch' && c.torch) cam.apply({ torch: true });
   if (c.exposureCompensation) cam.apply({ exposureCompensation: 0 });
-  swEv = 0;
+  swEv = evNow = 0;
   setLock(false);
   // Some Safari versions report the multi-lens zoom with 1 = ultra wide; others
   // already scale it so 1 = the main lens. Either way the dial shows 1× as the main lens.
@@ -109,13 +109,13 @@ const bytesPerShot = () => {
   return r.sw * r.sh * (S.quality > 0.95 ? 0.5 : S.quality > 0.85 ? 0.32 : 0.18) + 40e3;
 };
 
-function currentEv() {
-  const c = cam.caps();
-  return c.exposureCompensation ? cam.current().exposureCompensation || 0 : swEv;
-}
+// Our own record of the exposure offset. Reading it back from the track lags
+// behind what was just applied, which made repeated adjustments pile up.
+let evNow = 0;
+const currentEv = () => evNow;
 function setEv(ev) {
   const c = cam.caps(), r = c.exposureCompensation || { min: -2, max: 2 };
-  ev = Math.round(clamp(ev, r.min, r.max) * 10) / 10;
+  evNow = ev = Math.round(clamp(ev, Math.max(r.min, -3), Math.min(r.max, 3)) * 10) / 10;
   if (c.exposureCompensation) cam.apply({ exposureCompensation: ev });
   else swEv = ev;
   updateReadout(ev);
@@ -255,7 +255,7 @@ function loop(now) {
   if (layout.key !== `${video.videoWidth}x${video.videoHeight}`) layout();
   try {
     preview.draw(video, video.videoWidth, video.videoHeight, liveRecipe(), {
-      aspect: viewAspect(), zoom: dzoom, outW: previewCanvas.width, outH: previewCanvas.height, mirror: mirrored(),
+      aspect: viewAspect(), zoom: dzoom, outW: previewCanvas.width, outH: previewCanvas.height, mirror: mirrored(), grainSeed: Math.random(),
     });
   } catch {
     return; // graphics context lost; it comes back on its own
@@ -301,33 +301,26 @@ async function setLevel(on) {
 // Hold to lock: a ring draws around your finger and the lock badge appears.
 
 let aeLock = false;
-const canFocus = () => 'pointsOfInterest' in cam.current() || (cam.caps().focusMode || []).includes('single-shot');
+const canFocus = () => 'pointsOfInterest' in cam.current();
 
 function setLock(on) {
   aeLock = on;
   $('#lockPill').hidden = !on;
   $('#lockPill').textContent = canFocus() ? 'AE/AF lock' : 'AE lock';
   $('#focus').classList.toggle('locked', on);
-  const c = cam.caps();
-  if (c.exposureMode?.includes(on ? 'manual' : 'continuous')) cam.apply({ exposureMode: on ? 'manual' : 'continuous' });
-  if (c.focusMode?.includes(on ? 'manual' : 'continuous')) cam.apply({ focusMode: on ? 'manual' : 'continuous' });
 }
 
-// Nudges exposure so the area under the finger lands near mid-grey. Runs a few
-// passes because the camera (or our own adjustment) takes a frame or two to show up.
+// One measurement of the spot under the finger, one correction toward mid-grey,
+// capped at 1.5 stops. Focus stays continuous so it keeps tracking; a focus point
+// is only set where the browser supports one.
 async function meter(fx, fy) {
-  const c = cam.caps();
-  if ('pointsOfInterest' in cam.current()) cam.apply({ pointsOfInterest: [{ x: fx, y: fy }] });
-  if (c.focusMode?.includes('single-shot')) cam.apply({ focusMode: 'single-shot' });
-  for (let i = 0; i < 3; i++) {
-    const W = previewCanvas.width, H = previewCanvas.height, r = Math.min(W, H) * 0.06;
-    const px = preview.sample(fx * W - r, fy * H - r, r * 2, r * 2);
-    let lum = 0;
-    for (let j = 0; j < px.length; j += 4) lum += px[j] * 0.299 + px[j + 1] * 0.587 + px[j + 2] * 0.114;
-    lum /= (px.length / 4) * 255;
-    setEv(currentEv() + 0.8 * Math.log2(0.46 / Math.max(lum, 0.02)));
-    await sleep(160);
-  }
+  if (canFocus()) cam.apply({ pointsOfInterest: [{ x: fx, y: fy }] });
+  const W = previewCanvas.width, H = previewCanvas.height, r = Math.min(W, H) * 0.06;
+  const px = preview.sample(fx * W - r, fy * H - r, r * 2, r * 2);
+  let lum = 0;
+  for (let j = 0; j < px.length; j += 4) lum += px[j] * 0.299 + px[j + 1] * 0.587 + px[j + 2] * 0.114;
+  lum /= (px.length / 4) * 255;
+  setEv(evNow + 0.7 * clamp(Math.log2(0.42 / Math.max(lum, 0.02)), -1.5, 1.5));
 }
 
 function showFocus(x, y, cls) {
@@ -439,7 +432,8 @@ async function withFlash(fn) {
   try { return await fn(); } finally { cam.apply({ torch: false }); }
 }
 
-const MAX_INFLIGHT = 3;
+// Safari keeps every in-flight frame as a full-size canvas, and iOS caps canvas memory.
+const MAX_INFLIGHT = /Chrome\//.test(navigator.userAgent) ? 3 : 2;
 const grabs = [];
 
 // drawImage(video) into a 2D canvas is the capture path that works everywhere on
@@ -664,17 +658,10 @@ function updateLook() {
 }
 
 function openLookSheet() {
-  const grid = $('#camGrid');
-  grid.innerHTML = '';
-  for (const c of CAMERAS) {
-    const card = cameraCard(c, c.id === S.cam);
-    card.onclick = () => {
-      S.cam = c.id; S.fx = fxFor(c.id); save();
-      $$('.cam-card', grid).forEach((x) => x.classList.toggle('on', x === card));
-      updateLook(); buildFx(); layout();
-    };
-    grid.append(card);
-  }
+  cameraList($('#camGrid'), S.cam, (id) => {
+    S.cam = id; S.fx = fxFor(id); save();
+    updateLook(); buildFx(); layout();
+  });
   buildFx();
   sheet('lookSheet');
 }

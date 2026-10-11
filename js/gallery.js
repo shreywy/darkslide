@@ -1,6 +1,6 @@
 import { $, $$, el, toast, sheet, closeSheet, showScreen, hideScreen, slider, toggle } from './dom.js';
-import { CAMERAS, camera, fxFor, newRecipe, cameraCard } from './looks.js';
-import { offscreen, compose, makeThumb, toJpeg, renderShot, plan, decode } from './render.js';
+import { camera, fxFor, newRecipe, cameraCard, cameraList, byPins } from './looks.js';
+import { offscreen, compose, makeThumb, toJpeg, renderShot, plan, decode, release } from './render.js';
 import { levelAngle, grayOf } from './level.js';
 import { allShots, allRolls, getRaw, putShots, deleteShots, deleteRolls, addShot, putRoll, newId } from './store.js';
 import { everyLabel } from './interval.js';
@@ -137,20 +137,14 @@ function wireGallery() {
     exitSelect();
   });
   $('#selLook').onclick = needSel((ids) => {
-    const grid = $('#pickGrid');
-    grid.innerHTML = '';
-    for (const c of CAMERAS) {
-      const card = cameraCard(c, false);
-      card.onclick = async () => {
-        closeSheet($('#pickSheet'));
-        const list = ids.map((id) => byId.get(id));
-        list.forEach((s) => Object.assign(s.recipe, fxFor(c.id), { cam: c.id }));
-        await rethumb(list);
-        exitSelect();
-        render();
-      };
-      grid.append(card);
-    }
+    cameraList($('#pickGrid'), null, async (id) => {
+      closeSheet($('#pickSheet'));
+      const list = ids.map((x) => byId.get(x));
+      list.forEach((s) => Object.assign(s.recipe, fxFor(id), { cam: id }));
+      await rethumb(list);
+      exitSelect();
+      render();
+    });
     sheet('pickSheet');
   });
 }
@@ -258,6 +252,7 @@ async function saveToPhotos(ids) {
       progress(`Preparing ${i + j + 1} of ${list.length}`, (i + j) / list.length);
       const c = await renderShot(R, await getRaw(s.id), s);
       const blob = await toJpeg(c, camera(s.recipe.cam).q || 0.92);
+      release(c);
       files.push(new File([blob], `darkslide-${stamp(s.t)}-${s.id.slice(-2)}.jpg`, { type: 'image/jpeg', lastModified: s.t }));
     }
     const part = list.length > BATCH ? ` (${i / BATCH + 1} of ${Math.ceil(list.length / BATCH)})` : '';
@@ -324,6 +319,7 @@ async function encode(list, { fps, size }) {
     const sc = Math.max(W / c.width, H / c.height); // cover, in case a frame has a different shape
     x.fillRect(0, 0, W, H);
     x.drawImage(c, (W - c.width * sc) / 2, (H - c.height * sc) / 2, c.width * sc, c.height * sc);
+    release(c);
     const frame = new VideoFrame(out, { timestamp: Math.round((i * 1e6) / fps), duration: Math.round(1e6 / fps) });
     enc.encode(frame, { keyFrame: i % (fps * 2) === 0 });
     frame.close();
@@ -355,7 +351,9 @@ async function openViewer(id) {
 function closeViewer() {
   if (editing) finishEdit();
   hideScreen($('#viewer'));
+  release(src);
   src = null;
+  setTimeout(() => { release($('#stage canvas')); $('#stage').innerHTML = ''; }, 200);
 }
 
 async function show() {
@@ -369,6 +367,7 @@ async function show() {
     const img = await decode(await getRaw(s.id));
     const long = Math.min(2400, Math.max(innerWidth, innerHeight) * Math.min(devicePixelRatio || 1, 2));
     const k = Math.min(1, long / Math.max(img.width, img.height));
+    release(src);
     src = Object.assign(document.createElement('canvas'), { width: Math.round(img.width * k), height: Math.round(img.height * k) });
     src.getContext('2d').drawImage(img, 0, 0, src.width, src.height);
     img.close?.();
@@ -387,9 +386,10 @@ function draw(swap = false) {
     if (!src) return;
     const s = cur(), recipe = editing || s.recipe, stage = $('#stage');
     try {
-      const c = offscreen().render(src, src.width, src.height, recipe);
+      const c = offscreen().render(src, src.width, src.height, recipe), old = stage.firstChild;
       stage.classList.toggle('swap', swap);
       stage.replaceChildren(compose(c, recipe, { date: new Date(s.t) }));
+      release(c, old?.tagName === 'CANVAS' ? old : null);
     } catch (e) {
       toast(e.message);
     }
@@ -486,7 +486,7 @@ function buildEditor() {
 
   const strip = $('#edCams');
   strip.innerHTML = '';
-  for (const c of CAMERAS) {
+  for (const c of byPins()) {
     const card = cameraCard(c, c.id === r.cam);
     card.onclick = () => {
       Object.assign(r, fxFor(c.id), { cam: c.id });

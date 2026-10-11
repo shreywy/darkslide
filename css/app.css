@@ -278,3 +278,21 @@ button { transition: transform 0.08s, opacity 0.15s; }
 @keyframes down { to { transform: translateY(48px); opacity: 0; } }
 @keyframes fade { from { opacity: 0; } }
 @keyframes pop { from { transform: translateY(6px); opacity: 0; } }
+
+/* camera list */
+.cam-sec { color: var(--mute); font-size: 11px; margin: 14px 0 2px; }
+.cam-sec:first-child { margin-top: 2px; }
+.cam-row { display: flex; align-items: center; border-bottom: 1px solid var(--line); }
+.cam-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 8px 0; text-align: left; }
+.cam-thumb { width: 68px; height: 51px; flex-shrink: 0; object-fit: cover; border-radius: 4px; background: #e9e4da; }
+.cam-thumb.cam-none { display: grid; place-items: center; background: var(--raise2); border: 1px dashed var(--line2); color: var(--mute); font: 11px 'Plex Mono', monospace; }
+.cam-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cam-text b { font-weight: 500; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cam-text small { font: 11px 'Plex Mono', monospace; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cam-row.on .cam-thumb { outline: 1.5px solid var(--fg); outline-offset: 2px; }
+.cam-row.on b::after { content: ''; display: inline-block; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: var(--red); vertical-align: 2px; }
+.pin { width: 46px; height: 46px; flex-shrink: 0; display: grid; place-items: center; color: var(--mute); }
+.pin svg { width: 20px; height: 20px; transition: transform 0.15s; }
+.pin.on { color: #f3c64a; }
+.pin.on svg { fill: currentColor; }
+.pin:active svg { transform: scale(1.25); }
