@@ -46,17 +46,27 @@ export async function apply(c) {
   }
 }
 
-// iOS lists each physical lens plus virtual "Dual"/"Triple" devices; we only want
-// the physical ones. Labels are only filled in after permission is granted.
+// iOS lists each physical lens plus virtual "Dual Wide"/"Triple" devices that zoom
+// across lenses the way the Camera app does. Labels only appear after permission.
 export async function lenses() {
   const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
-  return devs
-    .filter((d) => !/dual|triple/i.test(d.label))
-    .map((d, i) => {
-      const l = d.label.toLowerCase();
-      const kind = /front|user|facetime/.test(l) ? 'front' : /ultra/.test(l) ? 'ultra' : /tele/.test(l) ? 'tele' : l ? 'wide' : 'cam' + i;
-      return { id: d.deviceId, label: d.label, kind };
-    });
+  return devs.map((d, i) => {
+    const l = d.label.toLowerCase();
+    const kind = /front|user|facetime/.test(l) ? 'front' : /dual|triple/.test(l) ? 'multi'
+      : /ultra/.test(l) ? 'ultra' : /tele/.test(l) ? 'tele' : l ? 'wide' : 'cam' + i;
+    return { id: d.deviceId, label: d.label, kind };
+  });
+}
+
+// Changes resolution on the running track, which avoids a new permission prompt.
+export async function resize(id) {
+  const r = RESOLUTIONS.find((x) => x.id === id) || RESOLUTIONS[0];
+  try {
+    await track().applyConstraints({ width: { ideal: r.w }, height: { ideal: r.h }, frameRate: { ideal: 30 } });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // Moving test scene for desktop testing (?demo) and screenshots.

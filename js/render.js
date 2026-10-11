@@ -25,8 +25,10 @@ export function plan(sw, sh, recipe, { aspect, zoom = 1, maxLong = Infinity } = 
   };
 }
 
-const VERT = `attribute vec2 p; varying vec2 v;
-void main() { v = vec2(p.x * .5 + .5, .5 - p.y * .5); gl_Position = vec4(p, 0., 1.); }`;
+// yflip = -1 when rendering into the framebuffer that gets read back, so rows come
+// out top-first like a 2D canvas.
+const VERT = `attribute vec2 p; varying vec2 v; uniform float yflip;
+void main() { v = vec2(p.x * .5 + .5, .5 - p.y * .5); gl_Position = vec4(p.x, p.y * yflip, 0., 1.); }`;
 
 const FRAG = `precision highp float;
 varying vec2 v;
@@ -124,9 +126,19 @@ void main() {
   gl_FragColor = vec4(clamp(c, 0., 1.), 1.);
 }`;
 
+// One WebGL context does everything: the live viewfinder draws to the visible
+// canvas, and thumbnails, the viewer and exports draw into a framebuffer that is read
+// back with readPixels. iOS doesn't reliably survive a second context or copying a
+// WebGL canvas into a 2D one, which is what turned photos black.
 export class Renderer {
   constructor(canvas = document.createElement('canvas')) {
     this.canvas = canvas;
+    canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.lost = true; });
+    canvas.addEventListener('webglcontextrestored', () => this.init());
+    this.init();
+  }
+
+  init() {
     const gl = (this.gl = this.canvas.getContext('webgl2', { preserveDrawingBuffer: true, antialias: false, alpha: false }));
     if (!gl) throw new Error('This browser has no WebGL2');
     const shader = (type, src) => {
@@ -146,30 +158,86 @@ export class Renderer {
     const loc = gl.getAttribLocation(p, 'p');
     gl.enableVertexAttribArray(loc);
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-    gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    const tex = () => {
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      return t;
+    };
+    this.fboTex = tex();
+    this.fbo = gl.createFramebuffer();
+    this.fboSize = '';
+    this.tex = tex();
+    this.max = gl.getParameter(gl.MAX_TEXTURE_SIZE);
     this.u = {};
     for (let i = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS); i--;) {
       const name = gl.getActiveUniform(p, i).name;
       this.u[name] = gl.getUniformLocation(p, name);
     }
+    this.lost = false;
   }
 
-  // Renders src into this.canvas. opts: aspect, zoom, maxLong, outW/outH, mirror, mip.
+  // Draws to the visible canvas. opts: aspect, zoom, outW/outH, mirror.
   draw(src, sw, sh, recipe, opts = {}) {
-    const gl = this.gl, P = plan(sw, sh, recipe, opts), t = camera(recipe.cam).tone;
+    return this.pass(false, src, sw, sh, recipe, opts);
+  }
+
+  // Renders off screen and returns a 2D canvas. opts: aspect, maxLong.
+  render(src, sw, sh, recipe, opts = {}) {
+    const { ow, oh } = this.pass(true, src, sw, sh, recipe, opts);
+    const gl = this.gl, px = new Uint8ClampedArray(ow * oh * 4);
+    gl.readPixels(0, 0, ow, oh, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const c = Object.assign(document.createElement('canvas'), { width: ow, height: oh });
+    c.getContext('2d').putImageData(new ImageData(px, ow, oh), 0, 0);
+    return c;
+  }
+
+  // RGBA bytes of a region of the viewfinder, in canvas pixels from the top left.
+  sample(x, y, w, h) {
+    const gl = this.gl, W = this.canvas.width, H = this.canvas.height;
+    x = Math.min(W - 1, Math.max(0, Math.round(x)));
+    y = Math.min(H - 1, Math.max(0, Math.round(y)));
+    w = Math.max(1, Math.min(Math.round(w), W - x));
+    h = Math.max(1, Math.min(Math.round(h), H - y));
+    const px = new Uint8Array(w * h * 4);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.readPixels(x, H - y - h, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    return px;
+  }
+
+  pass(off, src, sw, sh, recipe, opts) {
+    const gl = this.gl;
+    if (this.lost || gl.isContextLost()) throw new Error('The graphics were reset. Try again.');
+    const maxLong = Math.min(opts.maxLong ?? Infinity, this.max);
+    const P = plan(sw, sh, recipe, { ...opts, maxLong }), t = camera(recipe.cam).tone;
     const ow = opts.outW || P.ow, oh = opts.outH || P.oh;
-    if (this.canvas.width !== ow) this.canvas.width = ow;
-    if (this.canvas.height !== oh) this.canvas.height = oh;
+    if (off) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
+      if (this.fboSize !== ow + 'x' + oh) {
+        gl.bindTexture(gl.TEXTURE_2D, this.fboTex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, ow, oh, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.fboTex, 0);
+        this.fboSize = ow + 'x' + oh;
+      }
+    } else {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      if (this.canvas.width !== ow) this.canvas.width = ow;
+      if (this.canvas.height !== oh) this.canvas.height = oh;
+    }
     gl.viewport(0, 0, ow, oh);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
-    const mip = opts.mip !== false && Math.max(P.cw, P.ch) > Math.max(ow, oh) * 1.5;
+    const mip = off && Math.max(P.cw, P.ch) > Math.max(ow, oh) * 1.5;
     if (mip) gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, mip ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR);
 
     const f = (name, ...v) => this.u[name] && gl['uniform' + v.length + 'f'](this.u[name], ...v);
+    f('yflip', off ? -1 : 1);
     f('texSize', sw, sh); f('crop', P.cw, P.ch); f('outSize', ow, oh);
     f('angle', P.angle); f('flip', opts.mirror ? -1 : 1);
     const pix = t.pix ? (ow >= oh ? t.pix : [t.pix[1], t.pix[0]]) : [0, 0];
@@ -191,8 +259,8 @@ export class Renderer {
   }
 }
 
-// Shared off-screen renderer for thumbnails, the viewer and exports.
 let shared;
+export const initRenderer = (canvas) => (shared = new Renderer(canvas));
 export const offscreen = () => (shared ||= new Renderer());
 
 // Seven-segment date imprint, the orange kind from 90s compacts.
@@ -255,13 +323,14 @@ export function compose(src, recipe, { date = null, frame = true } = {}) {
   return c;
 }
 
-// JPEG encoding runs in two workers. On the main thread, toBlob/convertToBlob get
-// deferred to idle time while the viewfinder draws (about a second per call).
+// Chromium defers canvas.toBlob to idle time while the viewfinder draws (about a
+// second per call), so there it goes through two workers. Safari's toBlob doesn't
+// have that problem and is the most reliable path on iOS.
+const useWorkers = typeof OffscreenCanvas !== 'undefined' && typeof navigator !== 'undefined' && /Chrome\//.test(navigator.userAgent);
 let workers, jobSeq = 0;
 const jobs = new Map();
 function pool() {
-  if (workers) return workers;
-  workers = typeof OffscreenCanvas === 'undefined' ? [] : [0, 1].map(() => {
+  return (workers ||= [0, 1].map(() => {
     const w = new Worker(new URL('./encoder.js', import.meta.url));
     w.onmessage = ({ data }) => {
       const j = jobs.get(data.id);
@@ -269,46 +338,48 @@ function pool() {
       data.error ? j.rej(new Error(data.error)) : j.res(data.blob);
     };
     return w;
-  });
-  return workers;
+  }));
 }
 
-// Encodes and closes an ImageBitmap.
-export function encodeBitmap(bmp, q = 0.92, mirror = false) {
-  const ws = pool();
-  if (!ws.length) {
-    const c = Object.assign(document.createElement('canvas'), { width: bmp.width, height: bmp.height });
-    const x = c.getContext('2d');
-    x.setTransform(mirror ? -1 : 1, 0, 0, 1, mirror ? c.width : 0, 0);
-    x.drawImage(bmp, 0, 0);
-    bmp.close();
-    return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('Could not encode JPEG'))), 'image/jpeg', q));
-  }
-  const id = ++jobSeq;
+const viaToBlob = (canvas, q) =>
+  new Promise((res, rej) => canvas.toBlob((b) => (b ? res(b) : rej(new Error('Could not encode JPEG'))), 'image/jpeg', q));
+
+export async function toJpeg(canvas, q = 0.92) {
+  if (!useWorkers) return viaToBlob(canvas, q);
+  const bmp = await createImageBitmap(canvas);
+  const ws = pool(), id = ++jobSeq;
   return new Promise((res, rej) => {
     jobs.set(id, { res, rej });
-    ws[id % ws.length].postMessage({ id, bmp, mirror, q }, [bmp]);
+    ws[id % ws.length].postMessage({ id, bmp, q }, [bmp]);
   });
 }
 
-export const toJpeg = async (canvas, q = 0.92) => encodeBitmap(await createImageBitmap(canvas), q);
+// createImageBitmap(blob), falling back to an <img> when that fails.
+export async function decode(blob) {
+  try {
+    return await createImageBitmap(blob);
+  } catch {
+    const url = URL.createObjectURL(blob), img = new Image();
+    img.src = url;
+    await img.decode();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    return img;
+  }
+}
 
 // Full render of a stored shot: raw blob -> look -> border/date -> 2D canvas.
 export async function renderShot(renderer, raw, shot, { maxLong = Infinity, frame = true, date = true, aspect } = {}) {
-  const bmp = await createImageBitmap(raw);
-  renderer.draw(bmp, bmp.width, bmp.height, shot.recipe, { maxLong, aspect });
-  bmp.close();
-  return compose(renderer.canvas, shot.recipe, { frame, date: date ? new Date(shot.t) : null });
+  const img = await decode(raw);
+  const c = renderer.render(img, img.width, img.height, shot.recipe, { maxLong, aspect });
+  img.close?.();
+  return compose(c, shot.recipe, { frame, date: date ? new Date(shot.t) : null });
 }
 
 // Small rendered preview for the gallery grid (look applied, no border or date).
-export function makeThumb(src, w, h, recipe, mirror = false) {
+export function makeThumb(src, w, h, recipe) {
   const k = Math.min(1, 360 / Math.max(w, h));
   const small = Object.assign(document.createElement('canvas'), { width: Math.round(w * k), height: Math.round(h * k) });
-  const x = small.getContext('2d');
-  if (mirror) x.setTransform(-1, 0, 0, 1, small.width, 0);
-  x.drawImage(src, 0, 0, small.width, small.height);
-  const R = offscreen();
-  R.draw(small, small.width, small.height, recipe, { maxLong: 360 });
-  return toJpeg(compose(R.canvas, recipe, { frame: false }), 0.8);
+  small.getContext('2d').drawImage(src, 0, 0, small.width, small.height);
+  const c = offscreen().render(small, small.width, small.height, recipe, { maxLong: 360 });
+  return toJpeg(compose(c, recipe, { frame: false }), 0.8);
 }

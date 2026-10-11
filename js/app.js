@@ -1,7 +1,7 @@
 import { $, $$, el, prefs, toast, sheet, slider, toggle, fmtDuration, fmtBytes } from './dom.js';
 import * as cam from './camera.js';
 import { CAMERAS, camera, fxFor, newRecipe, cameraCard } from './looks.js';
-import { Renderer, makeThumb, encodeBitmap, plan } from './render.js';
+import { initRenderer, makeThumb, toJpeg, plan } from './render.js';
 import { totalShots, newRun, step, everyLabel } from './interval.js';
 import { addShot, allShots, allRolls, putRoll, newId } from './store.js';
 import { initGallery, openGallery } from './gallery.js';
@@ -32,12 +32,14 @@ let run = null, runTimer = 0, hudTimer = 0, runRoll = null, wakeLock = null, use
 const knownRolls = new Set();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const isFront = () => (lensList.find((l) => l.id === cam.current().deviceId)?.kind ?? (S.facing === 'user' ? 'front' : '')) === 'front';
 const mirrored = () => isFront() && S.mirror;
 const viewAspect = () => camera(S.cam).aspect || S.aspect || null;
 
 // ---------- camera ----------
 
+let switchedToMulti = false;
 async function startCamera() {
   $('#vfMsg').hidden = true;
   $('#roRes').textContent = 'starting';
@@ -48,12 +50,18 @@ async function startCamera() {
     await video.play().catch(() => {});
     stream.getVideoTracks()[0].addEventListener('ended', () => { if (!document.hidden) startCamera(); });
     lensList = useDemo ? [] : await cam.lenses();
-    dzoom = 1;
-    renderLenses();
+    // The virtual multi-lens camera zooms from 0.5× through telephoto like the Camera app.
+    const multi = lensList.find((l) => /triple/i.test(l.label)) || lensList.find((l) => l.kind === 'multi');
+    if (!isFront() && multi && multi.id !== cam.current().deviceId && !switchedToMulti) {
+      switchedToMulti = true;
+      S.deviceId = multi.id;
+      save();
+      return startCamera();
+    }
     applyCaps();
   } catch (e) {
     const msg = {
-      NotAllowedError: 'Darkslide needs the camera. Allow access when Safari asks, or turn it on in Settings › Apps › Safari › Camera.',
+      NotAllowedError: 'Darkslide needs the camera. Allow it when asked. To stop the question coming back, set Settings › Apps › Safari › Camera to Allow.',
       NotFoundError: 'No camera found on this device.',
       NotReadableError: 'The camera is in use by another app. Close it and try again.',
       Insecure: 'The camera only works over https. Open the GitHub Pages link instead of a local file.',
@@ -64,29 +72,24 @@ async function startCamera() {
   }
 }
 
-function renderLenses() {
-  const box = $('#lenses');
-  box.innerHTML = '';
-  const back = lensList.filter((l) => l.kind !== 'front');
-  if (isFront() || back.length < 2) return;
-  const order = { ultra: 0, wide: 1, tele: 2 };
-  const label = { ultra: '.5', wide: '1×', tele: 'tele' };
-  const active = cam.current().deviceId;
-  for (const l of back.sort((a, b) => (order[a.kind] ?? 3) - (order[b.kind] ?? 3))) {
-    const b = el(`<button class="${l.id === active ? 'on' : ''}" aria-label="${l.label}">${label[l.kind] || l.kind.replace('cam', '')}</button>`);
-    b.onclick = () => { S.deviceId = l.id; S.facing = 'environment'; save(); startCamera(); };
-    box.append(b);
-  }
+// Called when coming back to the camera: iOS may have paused the video or ended the track.
+function resumeCamera() {
+  if (cam.track()?.readyState !== 'live') return startCamera();
+  video.play().catch(() => {});
 }
 
 function applyCaps() {
   const c = cam.caps();
   $('#flashBtn').hidden = !(c.torch || isFront());
   if (S.flash === 'torch' && c.torch) cam.apply({ torch: true });
-  if (c.zoom) cam.apply({ zoom: c.zoom.min });
   if (c.exposureCompensation) cam.apply({ exposureCompensation: 0 });
   swEv = 0;
-  updateReadout();
+  setLock(false);
+  // Some Safari versions report the multi-lens zoom with 1 = ultra wide; others
+  // already scale it so 1 = the main lens. Either way the dial shows 1× as the main lens.
+  zoomBase = c.zoom && c.zoom.min >= 1 && /triple|dual wide/i.test(cam.track()?.label || '') ? 2 : 1;
+  dzoom = 1;
+  setZoom(1);
   layout();
 }
 
@@ -106,18 +109,101 @@ const bytesPerShot = () => {
   return r.sw * r.sh * (S.quality > 0.95 ? 0.5 : S.quality > 0.85 ? 0.32 : 0.18) + 40e3;
 };
 
-function updateReadout() {
+function currentEv() {
+  const c = cam.caps();
+  return c.exposureCompensation ? cam.current().exposureCompensation || 0 : swEv;
+}
+function setEv(ev) {
+  const c = cam.caps(), r = c.exposureCompensation || { min: -2, max: 2 };
+  ev = Math.round(clamp(ev, r.min, r.max) * 10) / 10;
+  if (c.exposureCompensation) cam.apply({ exposureCompensation: ev });
+  else swEv = ev;
+  updateReadout(ev);
+}
+
+function updateReadout(ev = currentEv()) {
   const vw = video.videoWidth, vh = video.videoHeight;
   if (vw) {
     const r = captureRect(vw, vh);
     $('#roRes').textContent = `${Math.round(r.sw)}×${Math.round(r.sh)}`;
   }
-  const c = cam.caps(), z = c.zoom ? cam.current().zoom || 1 : dzoom;
-  $('#roZoom').textContent = z.toFixed(1) + '×';
-  const ev = c.exposureCompensation ? cam.current().exposureCompensation || 0 : swEv;
+  $('#roZoom').textContent = fmtZoom(zoomNow) + '×';
   $('#roEv').textContent = 'ev ' + (ev >= 0 ? '+' : '') + ev.toFixed(1);
   $('#roLeft').textContent = isFinite(storageFree) ? `~${Math.max(0, Math.floor(storageFree / bytesPerShot()))} left` : '';
   if (S.mode === 'interval') updateInterval();
+}
+
+// ---------- zoom ----------
+// Values are what the user sees: 1 is the main lens, 0.5 the ultra wide.
+
+let zoomBase = 1, zoomNow = 1, zoomWant = null, zoomBusy = false;
+const fmtZoom = (z) => (z < 0.95 ? z.toFixed(1).replace(/^0/, '') : z % 1 > 0.05 ? z.toFixed(1) : String(Math.round(z)));
+
+function zoomRange() {
+  const c = cam.caps().zoom;
+  return c ? [c.min / zoomBase, Math.min(c.max / zoomBase, 15)] : [1, 4];
+}
+
+async function pushZoom(v) {
+  zoomWant = v;
+  if (zoomBusy) return;
+  zoomBusy = true;
+  while (zoomWant != null) {
+    const z = zoomWant;
+    zoomWant = null;
+    await cam.apply({ zoom: z });
+  }
+  zoomBusy = false;
+}
+
+function setZoom(z) {
+  const [lo, hi] = zoomRange();
+  zoomNow = clamp(z, lo, hi);
+  if (cam.caps().zoom) pushZoom(zoomNow * zoomBase);
+  else { dzoom = zoomNow; layout(); }
+  renderZoom();
+  updateReadout();
+}
+
+function renderZoom() {
+  const [lo, hi] = zoomRange();
+  const presets = [0.5, 1, 2, 3, 5].filter((p) => p >= lo - 0.01 && p <= hi + 0.01);
+  const box = $('#zoomPills');
+  const active = presets.filter((p) => p <= zoomNow + 0.01).pop() ?? presets[0];
+  box.innerHTML = '';
+  if (isFront()) return;
+  for (const p of presets) {
+    const on = p === active;
+    const b = el(`<button class="${on ? 'on' : ''}" data-z="${p}" aria-label="Zoom ${p}×">${on ? fmtZoom(zoomNow) + '×' : fmtZoom(p)}</button>`);
+    box.append(b);
+  }
+  $('#zoomVal').textContent = fmtZoom(zoomNow) + '×';
+  $('#zoomRuler').style.backgroundPositionX = `${-Math.log2(zoomNow) * 72}px`;
+}
+
+// Tap a number to jump; drag sideways across the bar for the dial (left is wider).
+function wireZoom() {
+  const bar = $('#zoom');
+  let x0 = 0, z0 = 1, dragging = false, hideTimer = 0, pill = null;
+  bar.addEventListener('pointerdown', (e) => {
+    x0 = e.clientX; z0 = zoomNow; dragging = false;
+    pill = e.target.closest('[data-z]'); // pointer capture retargets pointerup, so remember it now
+    bar.setPointerCapture(e.pointerId);
+    clearTimeout(hideTimer);
+  });
+  bar.addEventListener('pointermove', (e) => {
+    if (!bar.hasPointerCapture(e.pointerId)) return;
+    const dx = e.clientX - x0;
+    if (!dragging && Math.abs(dx) > 6) { dragging = true; bar.classList.add('dial'); }
+    if (dragging) setZoom(z0 * Math.pow(2, dx / 72));
+  });
+  const end = (e) => {
+    if (!dragging && pill) setZoom(+pill.dataset.z);
+    dragging = false;
+    hideTimer = setTimeout(() => bar.classList.remove('dial'), 700);
+  };
+  bar.addEventListener('pointerup', end);
+  bar.addEventListener('pointercancel', end);
 }
 
 // ---------- viewfinder ----------
@@ -152,38 +238,52 @@ function drawGrid(w, h) {
 }
 
 const liveRecipe = () => ({ ...newRecipe(S.cam, S.fx), exposure: swEv, seed: 0.37 });
-let lastHisto = 0;
-function loop() {
-  if (!paused && video.videoWidth && video.readyState >= 2) {
-    if (layout.key !== `${video.videoWidth}x${video.videoHeight}`) layout();
+
+// requestAnimationFrame drives the loop; requestVideoFrameCallback (where it
+// exists) only marks when a new camera frame is ready. If iOS pauses the video the
+// loop keeps running and nudges it to play again instead of dying.
+let fresh = true, lastDraw = 0, lastHisto = 0;
+function onFrame() { fresh = true; video.requestVideoFrameCallback(onFrame); }
+function loop(now) {
+  requestAnimationFrame(loop);
+  if (paused || !video.srcObject) return;
+  if (video.paused) video.play().catch(() => {});
+  if (!video.videoWidth || video.readyState < 2) return;
+  if (!fresh && now - lastDraw < 100) return;
+  fresh = !video.requestVideoFrameCallback;
+  lastDraw = now;
+  if (layout.key !== `${video.videoWidth}x${video.videoHeight}`) layout();
+  try {
     preview.draw(video, video.videoWidth, video.videoHeight, liveRecipe(), {
-      aspect: viewAspect(), zoom: dzoom, outW: previewCanvas.width, outH: previewCanvas.height, mirror: mirrored(), mip: false,
+      aspect: viewAspect(), zoom: dzoom, outW: previewCanvas.width, outH: previewCanvas.height, mirror: mirrored(),
     });
-    if (S.histo && performance.now() - lastHisto > 250) { lastHisto = performance.now(); histogram(); }
+  } catch {
+    return; // graphics context lost; it comes back on its own
   }
-  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(loop);
-  else requestAnimationFrame(loop);
+  if (S.histo && now - lastHisto > 250) { lastHisto = now; histogram(); }
 }
 
-const hc = Object.assign(document.createElement('canvas'), { width: 64, height: 48 });
-const hx = hc.getContext('2d', { willReadFrequently: true });
 function histogram() {
-  hx.drawImage(previewCanvas, 0, 0, 64, 48);
-  const px = hx.getImageData(0, 0, 64, 48).data, bins = new Array(64).fill(0);
-  for (let i = 0; i < px.length; i += 4) bins[(px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114) >> 2]++;
+  const W = previewCanvas.width, H = previewCanvas.height;
+  const px = preview.sample(0, 0, W, H), bins = new Array(64).fill(0), step = 4 * 7;
+  for (let i = 0; i < px.length; i += step) bins[(px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114) >> 2]++;
   const c = $('#histo').getContext('2d'), max = Math.max(...bins);
   c.clearRect(0, 0, 128, 40);
   c.fillStyle = 'rgba(233,228,218,.75)';
   bins.forEach((b, i) => { const h = (b / max) * 40; c.fillRect(i * 2, 40 - h, 2, h); });
 }
 
+// The line counter-rotates to stay level with the world. It's solid near level,
+// fades out past about 12° of tilt, and turns yellow when level.
 function levelListener(e) {
   const a = e.accelerationIncludingGravity;
   if (!a || a.x == null) return;
   const roll = (Math.atan2(a.x, a.y) * 180) / Math.PI;
   const d = ((((roll + 45) % 90) + 90) % 90) - 45;
-  $('#level i').style.transform = `rotate(${d}deg)`;
-  $('#level').classList.toggle('flat', Math.abs(d) < 1);
+  const lv = $('#level');
+  $('i', lv).style.transform = `rotate(${d}deg)`;
+  lv.style.opacity = clamp(1 - (Math.abs(d) - 2) / 10, 0, 1);
+  lv.classList.toggle('flat', Math.abs(d) < 1);
 }
 async function setLevel(on) {
   removeEventListener('devicemotion', levelListener);
@@ -196,51 +296,102 @@ async function setLevel(on) {
   addEventListener('devicemotion', levelListener);
 }
 
-// pinch to zoom, vertical drag for exposure, double tap to reset both
+// ---------- focus and exposure ----------
+// Tap meters exposure on that spot (and focuses there if the browser allows it).
+// Hold to lock: a ring draws around your finger and the lock badge appears.
+
+let aeLock = false;
+const canFocus = () => 'pointsOfInterest' in cam.current() || (cam.caps().focusMode || []).includes('single-shot');
+
+function setLock(on) {
+  aeLock = on;
+  $('#lockPill').hidden = !on;
+  $('#lockPill').textContent = canFocus() ? 'AE/AF lock' : 'AE lock';
+  $('#focus').classList.toggle('locked', on);
+  const c = cam.caps();
+  if (c.exposureMode?.includes(on ? 'manual' : 'continuous')) cam.apply({ exposureMode: on ? 'manual' : 'continuous' });
+  if (c.focusMode?.includes(on ? 'manual' : 'continuous')) cam.apply({ focusMode: on ? 'manual' : 'continuous' });
+}
+
+// Nudges exposure so the area under the finger lands near mid-grey. Runs a few
+// passes because the camera (or our own adjustment) takes a frame or two to show up.
+async function meter(fx, fy) {
+  const c = cam.caps();
+  if ('pointsOfInterest' in cam.current()) cam.apply({ pointsOfInterest: [{ x: fx, y: fy }] });
+  if (c.focusMode?.includes('single-shot')) cam.apply({ focusMode: 'single-shot' });
+  for (let i = 0; i < 3; i++) {
+    const W = previewCanvas.width, H = previewCanvas.height, r = Math.min(W, H) * 0.06;
+    const px = preview.sample(fx * W - r, fy * H - r, r * 2, r * 2);
+    let lum = 0;
+    for (let j = 0; j < px.length; j += 4) lum += px[j] * 0.299 + px[j + 1] * 0.587 + px[j + 2] * 0.114;
+    lum /= (px.length / 4) * 255;
+    setEv(currentEv() + 0.8 * Math.log2(0.46 / Math.max(lum, 0.02)));
+    await sleep(160);
+  }
+}
+
+function showFocus(x, y, cls) {
+  const f = $('#focus');
+  f.style.left = x + 'px';
+  f.style.top = y + 'px';
+  f.className = 'focus';
+  f.hidden = false;
+  void f.offsetWidth;
+  f.classList.add(...cls.split(' '));
+}
+
+// pinch to zoom, vertical drag for exposure, tap to meter, hold to lock
 function wireGestures() {
   const pts = new Map();
-  let start = null, lastTap = 0;
+  let start = null, holdTimer = 0;
   frame.addEventListener('pointerdown', (e) => {
     pts.set(e.pointerId, e);
-    const c = cam.caps();
-    start = { y: e.clientY, ev: c.exposureCompensation ? cam.current().exposureCompensation || 0 : swEv, zoom: c.zoom ? cam.current().zoom || 1 : dzoom, dist: 0, moved: false };
-    if (pts.size === 2) { const [a, b] = [...pts.values()]; start.dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY); }
+    const r = frame.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    start = { x, y, fx: x / r.width, fy: y / r.height, cy: e.clientY, ev: currentEv(), zoom: zoomNow, dist: 0, moved: false, locked: false };
+    clearTimeout(holdTimer);
+    if (pts.size === 2) {
+      const [a, b] = [...pts.values()];
+      start.dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      start.moved = true;
+      $('#focus').hidden = true;
+      return;
+    }
+    showFocus(x, y, 'holding');
+    const s = start;
+    holdTimer = setTimeout(() => {
+      s.locked = true;
+      meter(s.fx, s.fy).then(() => setLock(true));
+      showFocus(s.x, s.y, 'locked');
+    }, 650);
   });
   frame.addEventListener('pointermove', (e) => {
     if (!pts.has(e.pointerId) || !start) return;
     pts.set(e.pointerId, e);
-    const c = cam.caps();
     if (pts.size === 2 && start.dist) {
       const [a, b] = [...pts.values()];
-      let z = start.zoom * (Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) / start.dist);
-      start.moved = true;
-      if (c.zoom) { z = Math.min(c.zoom.max, Math.max(c.zoom.min, z)); cam.apply({ zoom: z }); }
-      else { dzoom = Math.min(4, Math.max(1, z)); layout(); }
-      updateReadout();
-    } else if (pts.size === 1 && Math.abs(e.clientY - start.y) > 12) {
-      start.moved = true;
-      const r = c.exposureCompensation || { min: -2, max: 2 };
-      const ev = Math.min(r.max, Math.max(r.min, start.ev - (e.clientY - start.y) / 120));
-      if (c.exposureCompensation) cam.apply({ exposureCompensation: ev }); else swEv = Math.round(ev * 10) / 10;
-      updateReadout();
+      setZoom(start.zoom * (Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) / start.dist));
+    } else if (pts.size === 1 && Math.abs(e.clientY - start.cy) > 12) {
+      if (!start.moved) { start.moved = true; clearTimeout(holdTimer); if (!start.locked) $('#focus').hidden = true; }
+      setEv(start.ev - (e.clientY - start.cy) / 120);
     }
   });
   const end = (e) => {
     pts.delete(e.pointerId);
-    if (start && !start.moved && pts.size === 0) {
-      if (performance.now() - lastTap < 300) {
-        const c = cam.caps();
-        dzoom = 1; swEv = 0;
-        if (c.zoom) cam.apply({ zoom: c.zoom.min });
-        if (c.exposureCompensation) cam.apply({ exposureCompensation: 0 });
-        layout();
-      }
-      lastTap = performance.now();
+    clearTimeout(holdTimer);
+    if (start && !start.moved && !start.locked && pts.size === 0) {
+      if (aeLock) setLock(false);
+      showFocus(start.x, start.y, 'tap');
+      meter(start.fx, start.fy);
+    } else if (start && !start.locked && !aeLock) {
+      $('#focus').hidden = true;
     }
     if (!pts.size) start = null;
   };
   frame.addEventListener('pointerup', end);
   frame.addEventListener('pointercancel', end);
+  $('#lockPill').onclick = () => { setLock(false); $('#focus').hidden = true; };
+  // Keep iOS from zooming the whole page on a pinch.
+  for (const t of ['gesturestart', 'gesturechange']) document.addEventListener(t, (e) => e.preventDefault());
 }
 
 // ---------- capture ----------
@@ -289,29 +440,36 @@ async function withFlash(fn) {
 }
 
 const MAX_INFLIGHT = 3;
+const grabs = [];
 
+// drawImage(video) into a 2D canvas is the capture path that works everywhere on
+// iOS. Each in-flight shot gets its own canvas from a small pool.
 async function capture(roll, meta) {
   const vw = video.videoWidth, vh = video.videoHeight;
   if (!vw || inflight >= MAX_INFLIGHT) return false;
   inflight++;
+  const c = grabs.pop() || document.createElement('canvas');
   try {
-    const r = captureRect(vw, vh);
-    const bmp = await createImageBitmap(video, Math.round(r.sx), Math.round(r.sy), Math.round(r.sw), Math.round(r.sh));
+    const r = captureRect(vw, vh), w = Math.round(r.sw), h = Math.round(r.sh);
+    if (c.width !== w) c.width = w;
+    if (c.height !== h) c.height = h;
+    const x = c.getContext('2d');
+    x.setTransform(mirrored() ? -1 : 1, 0, 0, 1, mirrored() ? w : 0, 0);
+    x.drawImage(video, r.sx, r.sy, r.sw, r.sh, 0, 0, w, h);
     click();
     blink();
     const recipe = { ...newRecipe(S.cam, S.fx), exposure: swEv };
-    const { width: w, height: h } = bmp, mirror = mirrored();
-    const thumbDone = makeThumb(bmp, w, h, recipe, mirror); // draws synchronously, before bmp is handed off
-    const [raw, thumb] = await Promise.all([encodeBitmap(bmp, S.quality, mirror), thumbDone]);
+    const [raw, thumb] = await Promise.all([toJpeg(c, S.quality), makeThumb(c, w, h, recipe)]);
     const shot = { id: newId(), roll, t: Date.now(), w, h, recipe, thumb };
     await ensureRoll(roll, meta);
     await addShot(shot, raw);
     setLast(thumb);
     return true;
   } catch (e) {
-    toast('Could not save that photo: ' + e.message);
+    toast(`Couldn't save that photo (${e.name}: ${e.message})`, 4000);
     return false;
   } finally {
+    grabs.push(c);
     inflight--;
   }
 }
@@ -543,15 +701,23 @@ function seg(label, options, value, onPick) {
 async function openSettings() {
   const body = $('#setBody');
   body.innerHTML = '';
-  const restart = () => { save(); startCamera(); };
+  const camNote = el('<p class="note mono"></p>');
+  const showCam = () => {
+    const t = cam.current();
+    camNote.textContent = `Camera is giving ${t.width || '?'}×${t.height || '?'} at ${Math.round(t.frameRate || 0) || '?'} fps. Safari only offers the video feed, so this is the most a web app can capture.`;
+  };
   body.append(
-    seg('Resolution', cam.RESOLUTIONS.map((r) => [r.label, r.id]), S.res, (v) => { S.res = v; restart(); }),
+    seg('Resolution', cam.RESOLUTIONS.map((r) => [r.label, r.id]), S.res, async (v) => {
+      S.res = v; save();
+      if (!(await cam.resize(v))) await startCamera();
+      setTimeout(() => { layout(); showCam(); }, 300);
+    }),
     seg('Aspect', ASPECTS, S.aspect, (v) => { S.aspect = v; save(); layout(); }),
     seg('Grid', [['off', 'off'], ['thirds', 'thirds'], ['4×4', '4x4'], ['golden', 'golden'], ['square', 'square']], S.grid, (v) => { S.grid = v; save(); layout(); }),
     seg('JPEG', [['small', 0.8], ['high', 0.92], ['max', 0.98]], S.quality, (v) => { S.quality = v; save(); updateReadout(); }),
+    camNote,
   );
-  const t = cam.current();
-  body.append(el(`<p class="note mono">Camera is giving ${t.width || '?'}×${t.height || '?'} at ${Math.round(t.frameRate || 0) || '?'} fps. Safari only offers the video feed, so this is the most a web app can capture.</p>`));
+  showCam();
   const tog = (label, key, fn) => body.append(toggle(label, S, key, () => { save(); fn?.(); }));
   tog('Level', 'level', () => setLevel(S.level));
   tog('Histogram', 'histo', () => { $('#histo').hidden = !S.histo; });
@@ -560,6 +726,7 @@ async function openSettings() {
   const e = await navigator.storage?.estimate?.().catch(() => null);
   const shots = (await allShots()).length;
   body.append(el(`<p class="note mono">${shots} photos · ${e ? fmtBytes(e.usage) + ' used · ' + fmtBytes(e.quota - e.usage) + ' free' : ''}</p>`));
+  body.append(el('<p class="note">If iOS keeps asking for the camera, open Settings › Apps › Safari › Camera and choose Allow. Web apps on the home screen follow that setting.</p>'));
   body.append(
     el(`<a class="set-link" href="${REPO}#full-quality-intervals-with-shortcuts" target="_blank" rel="noopener">Set up the full-quality shortcut</a>`),
     el(`<a class="set-link" href="${REPO}#install-on-iphone" target="_blank" rel="noopener">Install on iPhone</a>`),
@@ -593,9 +760,9 @@ function wire() {
   $('#setBtn').onclick = openSettings;
   $('#flipBtn').onclick = () => {
     if (run) return;
-    const front = lensList.find((l) => l.kind === 'front');
-    if (isFront()) { S.facing = 'environment'; S.deviceId = lensList.find((l) => l.kind === 'wide')?.id || null; }
-    else { S.facing = 'user'; S.deviceId = front?.id || null; }
+    const back = lensList.find((l) => /triple/i.test(l.label)) || lensList.find((l) => l.kind === 'multi') || lensList.find((l) => l.kind === 'wide');
+    if (isFront()) { S.facing = 'environment'; S.deviceId = back?.id || null; }
+    else { S.facing = 'user'; S.deviceId = lensList.find((l) => l.kind === 'front')?.id || null; }
     save(); startCamera();
   };
   $('#retryBtn').onclick = startCamera;
@@ -609,19 +776,19 @@ function wire() {
   document.addEventListener('visibilitychange', async () => {
     if (document.hidden) return;
     if (wakeLock || run) lockWake();
-    if (cam.track()?.readyState !== 'live') {
-      await startCamera();
-      if (run) toast('The camera stops while the app is in the background. Those shots are counted as missed.', 4000);
-    }
+    const wasLive = cam.track()?.readyState === 'live';
+    await resumeCamera();
+    if (!wasLive && run) toast('The camera stops while the app is in the background. Those shots are counted as missed.', 4000);
   });
   wireShutter();
   wireInterval();
   wireGestures();
+  wireZoom();
 }
 
 async function boot() {
   try {
-    preview = new Renderer(previewCanvas);
+    preview = initRenderer(previewCanvas);
   } catch (e) {
     $('#vfMsgText').textContent = 'This browser cannot run the viewfinder (' + e.message + ').';
     $('#vfMsg').hidden = false;
@@ -634,12 +801,13 @@ async function boot() {
   $('#histo').hidden = !S.histo;
   $('#level').hidden = true;
   if (S.level) document.addEventListener('pointerdown', () => setLevel(true), { once: true });
-  initGallery({ onClose: () => { paused = false; refreshLast(); refreshStorage(); } });
+  initGallery({ onClose: () => { paused = false; resumeCamera(); refreshLast(); refreshStorage(); } });
   (await allRolls()).forEach((r) => knownRolls.add(r.id));
   refreshLast();
   refreshStorage();
   await startCamera();
-  loop();
+  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(onFrame);
+  requestAnimationFrame(loop);
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js');
 }
 

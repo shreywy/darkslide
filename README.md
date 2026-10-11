@@ -69,9 +69,11 @@ Photos are grouped into rolls: one per interval run, one per burst, one per day 
 - camera: any of the 16 looks
 - adjust: exposure, contrast, saturation, warmth, fade
 - effects: grain, vignette, halation, light leak, dust, date imprint, print border
-- crop: rotate, straighten, and 1:1, 4:3, 3:2, 16:9 or 5:4
+- crop: rotate, straighten, auto level, and 1:1, 4:3, 3:2, 16:9 or 5:4
 
-**Select** lets you pick single photos or whole rolls to save, delete, restyle with one camera, or turn into a timelapse.
+Auto level looks for the horizon and other straight edges, works out how far the photo leans, then straightens and crops it. **Level** in the selection bar does the same for a whole batch.
+
+**Select** lets you pick single photos or whole rolls to save, delete, level, restyle with one camera, or turn into a timelapse.
 
 ## Saving to Photos
 
@@ -82,10 +84,11 @@ Photos are grouped into rolls: one per interval run, one per burst, one per day 
 ## Camera controls
 
 - Grid: thirds, 4×4, golden ratio, or a square guide
-- Level, using the motion sensor
+- Level, using the motion sensor. The line shows when you're close to level, turns yellow when you are, and fades out when you're well off.
 - Live histogram
-- Lens buttons for ultra wide, wide and telephoto, on iPhones that have them
-- Pinch to zoom, drag up or down on the viewfinder for exposure, double tap to reset both
+- Zoom like the Camera app: tap .5, 1 or 2, or drag sideways across the numbers for a dial. On iPhones with an ultra wide it uses the multi-lens camera, so it moves between lenses as you zoom. Pinch works too.
+- Tap the viewfinder to meter exposure on that spot. Hold to lock it: a ring draws around your finger and an AE lock badge appears. Tap the badge or anywhere else to unlock.
+- Drag up or down on the viewfinder to adjust exposure
 - Flash: fires the torch on the back camera, lights the screen white on the front camera, or keeps the torch on
 - Self-timer: 3 or 10 seconds
 - Burst: hold the shutter
@@ -98,10 +101,10 @@ Photos are grouped into rolls: one per interval run, one per burst, one per day 
 Darkslide is a web page, so it gets what Safari allows:
 
 - Resolution: shots are frames from the camera's video stream. Depending on the iPhone, that tops out somewhere between 1080p and 4K (about 2 to 12 megapixels). There's no 48 MP, RAW, Night mode, Deep Fusion or Apple HDR. Settings shows what your camera is actually delivering. The Shortcuts mode above is the way around this.
-- Manual controls: Safari doesn't expose shutter speed, ISO, manual focus or tap-to-focus. Zoom, torch and exposure compensation work where the browser supports them, and the exposure drag falls back to adjusting the image when it doesn't.
+- Manual controls: Safari doesn't expose shutter speed, ISO or manual focus, and usually not a focus point either. Tap and hold still set and lock exposure: Darkslide measures the spot under your finger and adjusts exposure compensation, or the image itself where the browser has none. If the browser does offer a focus point, the tap focuses there too.
 - Background: the camera stops when the app isn't on screen.
 - Hardware: the volume buttons can't be used as a shutter, and there's no haptic feedback.
-- Permissions: iOS sometimes asks for camera access again each time a home screen web app opens.
+- Permissions: iOS can ask for camera access again each time a home screen web app opens. Setting Settings › Apps › Safari › Camera to Allow stops that. Darkslide also changes resolution and zoom on the running camera instead of restarting it, so it doesn't trigger extra prompts.
 
 It needs iOS 16.4 or newer. Keeping the screen awake during runs needs iOS 18.4 or newer when Darkslide is opened from the home screen.
 
@@ -113,15 +116,16 @@ Plain HTML, CSS and JavaScript modules, no framework and no build step. GitHub P
 |---|---|
 | `js/app.js` | Viewfinder, controls, capture, interval runs |
 | `js/camera.js` | Camera stream, lenses, resolution, capability checks |
-| `js/render.js` | WebGL shader for the looks, print borders, date imprint, JPEG encoding |
+| `js/render.js` | WebGL shader for the looks, print borders, date imprint, JPEG encoding. One WebGL context draws the viewfinder and reads back every saved render. |
 | `js/looks.js` | The 16 camera presets |
 | `js/interval.js` | Interval scheduling |
+| `js/level.js` | Auto level: finds the tilt from edge directions |
 | `js/gallery.js` | Gallery, viewer, editor, saving, timelapse, import |
 | `js/store.js` | IndexedDB storage |
 | `js/encoder.js` | Worker that encodes JPEGs off the main thread |
 | `sw.js` | Offline cache |
 
-Every look is the same fragment shader with different numbers: tone and white balance, cross-processing, split toning, blur or sharpening, chromatic aberration, halation, grain, vignette, light leaks, dust, and a pixel grid with an ordered-dither palette for the Game Boy. JPEG encoding runs in two workers so a fast interval run doesn't stall the viewfinder.
+Every look is the same fragment shader with different numbers: tone and white balance, cross-processing, split toning, blur or sharpening, chromatic aberration, halation, grain, vignette, light leaks, dust, and a pixel grid with an ordered-dither palette for the Game Boy. On iOS, photos are grabbed with `drawImage` from the video into a 2D canvas and encoded with `toBlob`. In Chromium, encoding goes through two workers, because there `toBlob` waits for idle time while the viewfinder is drawing.
 
 ### Running it locally
 
@@ -135,7 +139,7 @@ Then open `http://localhost:8790/?demo`. The `?demo` flag swaps the camera for a
 npm test
 ```
 
-runs the checks for the interval scheduler and the crop and rotate math.
+runs the checks for the interval scheduler, the crop and rotate math, and auto level.
 
 ## Credits
 

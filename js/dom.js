@@ -31,14 +31,39 @@ export function toast(msg, ms = 2400) {
   toastTimer = setTimeout(() => t.classList.remove('show'), ms);
 }
 
-// <dialog> sheets close when the backdrop is tapped.
+const motion = () => !matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Full-screen panels slide in and out. hidden is only set once the exit animation ends.
+export function showScreen(el) {
+  clearTimeout(el._t);
+  el.hidden = false;
+  el.classList.remove('out');
+  el.classList.add('in');
+  el._t = setTimeout(() => el.classList.remove('in'), 260);
+}
+export function hideScreen(el) {
+  if (el.hidden) return;
+  clearTimeout(el._t);
+  el.classList.remove('in');
+  el.classList.add('out');
+  el._t = setTimeout(() => { el.hidden = true; el.classList.remove('out'); }, motion() ? 150 : 0);
+}
+
+// <dialog> sheets close when the backdrop is tapped, with a short slide down.
+export function closeSheet(d) {
+  if (!d.open || d.classList.contains('closing')) return;
+  d.classList.add('closing');
+  setTimeout(() => { d.classList.remove('closing'); d.close(); }, motion() ? 160 : 0);
+}
 export function sheet(id) {
   const d = document.getElementById(id);
   if (!d.dataset.wired) {
     d.dataset.wired = 1;
-    d.addEventListener('click', (e) => { if (e.target === d) d.close(); });
-    $$('[data-close]', d).forEach((b) => b.addEventListener('click', () => d.close()));
+    d.addEventListener('click', (e) => { if (e.target === d) closeSheet(d); });
+    d.addEventListener('cancel', (e) => { e.preventDefault(); closeSheet(d); });
+    $$('[data-close]', d).forEach((b) => b.addEventListener('click', () => closeSheet(d)));
   }
+  d.classList.remove('closing');
   if (!d.open) d.showModal();
   return d;
 }

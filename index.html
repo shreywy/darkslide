@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -42,6 +42,7 @@
 
   <div class="vf" id="vf">
     <div class="frame" id="frame">
+      <video id="video" playsinline muted autoplay></video>
       <canvas id="preview"></canvas>
       <svg class="grid" id="grid" viewBox="0 0 300 300" preserveAspectRatio="none"></svg>
       <div class="level" id="level"><i></i></div>
@@ -52,9 +53,14 @@
         <div class="bar-track"><i id="hudBar"></i></div>
         <button id="dimBtn" class="pill">dim screen</button>
       </div>
+      <div class="focus" id="focus" hidden><svg viewBox="0 0 64 64"><circle class="ring" cx="32" cy="32" r="26"/><circle class="draw" cx="32" cy="32" r="26"/></svg></div>
       <div class="blink" id="blink"></div>
     </div>
-    <div class="lenses mono" id="lenses"></div>
+    <button class="lockpill mono" id="lockPill" hidden>AE lock</button>
+    <div class="zoom mono" id="zoom">
+      <div class="zoom-dial" aria-hidden="true"><b id="zoomVal">1×</b><i id="zoomRuler"></i></div>
+      <div class="zoom-pills" id="zoomPills"></div>
+    </div>
     <div class="vf-msg" id="vfMsg" hidden>
       <p id="vfMsgText"></p>
       <button id="retryBtn" class="pill">Try again</button>
@@ -80,7 +86,6 @@
       <button id="flipBtn" class="ic round" aria-label="Switch camera"><svg><use href="#i-flip"/></svg></button>
     </div>
   </section>
-  <video id="video" playsinline muted autoplay></video>
 </main>
 
 <div id="dim" class="mono" hidden><b id="dimCount"></b><span>tap to wake the screen</span></div>
@@ -98,6 +103,7 @@
     <span id="selCount" class="mono">0 selected</span>
     <button id="selSave" class="txt">Save</button>
     <button id="selLook" class="txt">Look</button>
+    <button id="selLevel" class="txt">Level</button>
     <button id="selTl" class="txt">Timelapse</button>
     <button id="selDel" class="txt danger">Delete</button>
   </footer>

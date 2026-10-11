@@ -54,3 +54,20 @@ test('plan crops to aspect, rotates and straightens inside the source', () => {
   assert.equal(plan(4000, 3000, newRecipe('gbcam')).ow, 1024);
   assert.equal(plan(3000, 4000, r, { maxLong: 400 }).oh, 400);
 });
+
+import { levelAngle } from '../js/level.js';
+
+// Stripes whose lines run at `deg` (y down, so negative rises to the right).
+function stripes(deg, w = 300, h = 200) {
+  const a = (deg * Math.PI) / 180, g = new Float32Array(w * h);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) g[y * w + x] = 128 + 100 * Math.sin((2 * Math.PI * (y * Math.cos(a) - x * Math.sin(a))) / 16);
+  return g;
+}
+
+test('auto level finds the tilt and returns the angle that undoes it', () => {
+  assert.ok(Math.abs(levelAngle(stripes(-4), 300, 200) - 4) < 0.5);
+  assert.ok(Math.abs(levelAngle(stripes(6.5), 300, 200) + 6.5) < 0.5);
+  assert.ok(Math.abs(levelAngle(stripes(90 + 3), 300, 200) + 3) < 0.5); // verticals count too
+  assert.equal(levelAngle(new Float32Array(300 * 200).fill(90), 300, 200), null);
+});

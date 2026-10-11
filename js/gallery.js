@@ -1,6 +1,7 @@
-import { $, $$, el, toast, sheet, slider, toggle } from './dom.js';
+import { $, $$, el, toast, sheet, closeSheet, showScreen, hideScreen, slider, toggle } from './dom.js';
 import { CAMERAS, camera, fxFor, newRecipe, cameraCard } from './looks.js';
-import { offscreen, compose, makeThumb, toJpeg, renderShot, plan } from './render.js';
+import { offscreen, compose, makeThumb, toJpeg, renderShot, plan, decode } from './render.js';
+import { levelAngle, grayOf } from './level.js';
 import { allShots, allRolls, getRaw, putShots, deleteShots, deleteRolls, addShot, putRoll, newId } from './store.js';
 import { everyLabel } from './interval.js';
 import { Muxer, ArrayBufferTarget } from './vendor/mp4-muxer.mjs';
@@ -20,17 +21,19 @@ export function initGallery(opts) {
 }
 
 export async function openGallery() {
-  $('#gallery').hidden = false;
+  showScreen($('#gallery'));
   await load();
 }
 
 function closeGallery() {
-  $('#gallery').hidden = true;
+  hideScreen($('#gallery'));
   exitSelect();
-  urls.forEach(URL.revokeObjectURL);
-  urls = [];
-  $('#rolls').innerHTML = '';
   onClose();
+  setTimeout(() => {
+    urls.forEach(URL.revokeObjectURL);
+    urls = [];
+    $('#rolls').innerHTML = '';
+  }, 200);
 }
 
 async function load() {
@@ -115,6 +118,19 @@ function wireGallery() {
   $('#importInput').onchange = importFiles;
   $('#selSave').onclick = needSel(saveToPhotos);
   $('#selTl').onclick = needSel(timelapse);
+  $('#selLevel').onclick = needSel(async (ids) => {
+    const list = ids.map((id) => byId.get(id));
+    let done = 0;
+    for (const [i, s] of list.entries()) {
+      toast(`Levelling ${i + 1} of ${list.length}`);
+      const a = await autoAngle(s);
+      if (a != null) { s.recipe.straighten = a; done++; }
+    }
+    await rethumb(list);
+    exitSelect();
+    render();
+    toast(done === list.length ? `Levelled ${done} photo${done > 1 ? 's' : ''}` : `Levelled ${done} of ${list.length}. The rest had no straight lines to go by.`, 3500);
+  });
   $('#selDel').onclick = needSel(async (ids) => {
     if (!confirm(`Delete ${ids.length} photo${ids.length > 1 ? 's' : ''}? This can't be undone.`)) return;
     await remove(ids);
@@ -126,7 +142,7 @@ function wireGallery() {
     for (const c of CAMERAS) {
       const card = cameraCard(c, false);
       card.onclick = async () => {
-        $('#pickSheet').close();
+        closeSheet($('#pickSheet'));
         const list = ids.map((id) => byId.get(id));
         list.forEach((s) => Object.assign(s.recipe, fxFor(c.id), { cam: c.id }));
         await rethumb(list);
@@ -152,9 +168,9 @@ async function remove(ids) {
 async function rethumb(list) {
   for (const [i, s] of list.entries()) {
     if (list.length > 3) toast(`Updating ${i + 1} of ${list.length}`);
-    const bmp = await createImageBitmap(await getRaw(s.id));
-    s.thumb = await makeThumb(bmp, bmp.width, bmp.height, s.recipe);
-    bmp.close();
+    const img = await decode(await getRaw(s.id));
+    s.thumb = await makeThumb(img, img.width, img.height, s.recipe);
+    img.close?.();
   }
   await putShots(list);
 }
@@ -249,7 +265,7 @@ async function saveToPhotos(ids) {
     await shareStep(files, `Save ${files.length} photo${files.length > 1 ? 's' : ''}${part}`);
     if (!d.open) return;
   }
-  d.close();
+  closeSheet(d);
 }
 
 // ---------- timelapse ----------
@@ -269,11 +285,11 @@ async function timelapse(ids) {
   }
   info();
   $('#tlGo').onclick = async () => {
-    d.close();
+    closeSheet(d);
     try {
       await encode(list, opt);
     } catch (e) {
-      $('#saveSheet').close();
+      closeSheet($('#saveSheet'));
       toast('Video failed: ' + e.message, 4000);
     }
   };
@@ -320,7 +336,7 @@ async function encode(list, { fps, size }) {
   $('#saveNote').hidden = false;
   $('#saveNote').textContent = 'In the share sheet, pick “Save Video” to put it in your camera roll.';
   await shareStep([file], 'Save video');
-  d.close();
+  closeSheet(d);
   $('#saveNote').textContent = 'In the share sheet, pick “Save Images” to put them in your camera roll.';
 }
 
@@ -331,14 +347,14 @@ const cur = () => byId.get(order[idx]);
 
 async function openViewer(id) {
   idx = order.indexOf(id);
-  $('#viewer').hidden = false;
+  $('#stage').innerHTML = '';
+  showScreen($('#viewer'));
   await show();
 }
 
 function closeViewer() {
   if (editing) finishEdit();
-  $('#viewer').hidden = true;
-  $('#stage').innerHTML = '';
+  hideScreen($('#viewer'));
   src = null;
 }
 
@@ -349,25 +365,43 @@ async function show() {
   $('#vwInfo').textContent = `${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${d.toLocaleTimeString()} · ${camera(s.recipe.cam).name}`;
   $('#vwIdx').textContent = `${idx + 1} / ${order.length}`;
   // decode once, scaled to the screen, so slider edits redraw quickly
-  const bmp = await createImageBitmap(await getRaw(s.id));
-  const long = Math.min(2400, Math.max(innerWidth, innerHeight) * Math.min(devicePixelRatio || 1, 2));
-  const k = Math.min(1, long / Math.max(bmp.width, bmp.height));
-  src = Object.assign(document.createElement('canvas'), { width: Math.round(bmp.width * k), height: Math.round(bmp.height * k) });
-  src.getContext('2d').drawImage(bmp, 0, 0, src.width, src.height);
-  bmp.close();
-  draw();
+  try {
+    const img = await decode(await getRaw(s.id));
+    const long = Math.min(2400, Math.max(innerWidth, innerHeight) * Math.min(devicePixelRatio || 1, 2));
+    const k = Math.min(1, long / Math.max(img.width, img.height));
+    src = Object.assign(document.createElement('canvas'), { width: Math.round(img.width * k), height: Math.round(img.height * k) });
+    src.getContext('2d').drawImage(img, 0, 0, src.width, src.height);
+    img.close?.();
+    draw(true);
+  } catch (e) {
+    src = null;
+    $('#stage').replaceChildren(el(`<p class="empty">This photo couldn't be opened (${e.message}).</p>`));
+  }
 }
 
-function draw() {
+function draw(swap = false) {
   if (drawQueued || !src) return;
   drawQueued = true;
   requestAnimationFrame(() => {
     drawQueued = false;
-    const s = cur(), recipe = editing || s.recipe;
-    const R = offscreen();
-    R.draw(src, src.width, src.height, recipe);
-    $('#stage').replaceChildren(compose(R.canvas, recipe, { date: new Date(s.t) }));
+    if (!src) return;
+    const s = cur(), recipe = editing || s.recipe, stage = $('#stage');
+    try {
+      const c = offscreen().render(src, src.width, src.height, recipe);
+      stage.classList.toggle('swap', swap);
+      stage.replaceChildren(compose(c, recipe, { date: new Date(s.t) }));
+    } catch (e) {
+      toast(e.message);
+    }
   });
+}
+
+// Straighten angle for a shot, from its own pixels.
+async function autoAngle(s) {
+  const img = await decode(await getRaw(s.id));
+  const [g, w, h] = grayOf(img, img.width, img.height);
+  img.close?.();
+  return levelAngle(g, w, h);
 }
 
 function go(d) {
@@ -482,7 +516,19 @@ function buildEditor() {
     b.onclick = () => { r.crop = v; $$('button', chips).forEach((x) => x.classList.toggle('on', x === b)); draw(); };
     chips.append(b);
   }
-  crop.append(rot, chips, slider('Straighten', r, 'straighten', -15, 15, 0.1, draw, (v) => v.toFixed(1) + '°'));
+  const straight = slider('Straighten', r, 'straighten', -15, 15, 0.1, draw, (v) => v.toFixed(1) + '°');
+  const auto = el('<div class="crop-row"><button>auto level</button></div>');
+  $('button', auto).onclick = async (e) => {
+    e.target.textContent = 'levelling…';
+    const a = await autoAngle(cur());
+    e.target.textContent = 'auto level';
+    if (a == null) return toast('No horizon or straight edges to level against');
+    r.straighten = a;
+    straight.sync();
+    draw();
+    toast(a ? `Straightened by ${a > 0 ? '+' : ''}${a}°` : 'Already level');
+  };
+  crop.append(rot, auto, chips, straight);
 }
 
 function buildEffects() {

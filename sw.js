@@ -1,10 +1,10 @@
 // Offline cache for the app shell. Bump VERSION when shipping changes so phones
 // pick up the new files on the next launch.
-const VERSION = 'darkslide-1';
+const VERSION = 'darkslide-2';
 const CAMS = ['funsaver', 'sx70', 'instax', 'ixus', 'm6', 'k1000', 'mju2', 'lca', 'holga', 'hassel', 'super8', 'gbcam', 'mavica', 'ae1', 't2', 'trip'];
 const FILES = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',
-  'js/app.js', 'js/encoder.js', 'js/camera.js', 'js/dom.js', 'js/gallery.js', 'js/interval.js', 'js/looks.js', 'js/render.js', 'js/store.js', 'js/vendor/mp4-muxer.mjs',
+  'js/app.js', 'js/encoder.js', 'js/camera.js', 'js/dom.js', 'js/gallery.js', 'js/interval.js', 'js/level.js', 'js/looks.js', 'js/render.js', 'js/store.js', 'js/vendor/mp4-muxer.mjs',
   'fonts/plex-mono-400.woff2', 'fonts/plex-mono-500.woff2', 'fonts/plex-sans.woff2',
   'icons/icon.svg', 'icons/icon-180.png', 'icons/icon-192.png',
   ...CAMS.map((c) => `cameras/${c}.jpg`),

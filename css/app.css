@@ -47,7 +47,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .cam {
   position: fixed; inset: 0; display: grid;
   grid-template: "top" auto "ro" auto "vf" 1fr "dock" auto / 100%;
-  padding: var(--top) 0 var(--bot);
+  padding: calc(var(--top) + 10px) 0 var(--bot);
 }
 .top { grid-area: top; display: flex; align-items: center; justify-content: space-between; padding: 4px 8px 0; gap: 4px; }
 .look { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; height: 40px; min-width: 0; font-weight: 500; font-size: 14px; }
@@ -57,13 +57,17 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .look::after { content: ''; width: 6px; height: 6px; border: solid var(--dim); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg) translateY(-2px); }
 .readout { grid-area: ro; display: flex; justify-content: space-between; padding: 2px 16px 8px; color: var(--dim); font-size: 11px; }
 
-.vf { grid-area: vf; position: relative; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.vf { grid-area: vf; position: relative; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; touch-action: none; }
 .frame { position: relative; background: #000; }
 .frame:not([style]) { visibility: hidden; }
-.frame canvas#preview { width: 100%; height: 100%; display: block; }
+.frame canvas#preview { position: relative; z-index: 1; width: 100%; height: 100%; display: block; }
+/* The raw video sits under the rendered canvas. It has to stay laid out and
+   visible, or iOS pauses it. */
+.frame video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.frame > :not(video, #preview) { z-index: 2; }
 .grid { position: absolute; inset: 0; width: 100%; height: 100%; stroke: rgba(233, 228, 218, 0.32); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
 .grid * { vector-effect: non-scaling-stroke; }
-.level { position: absolute; left: 50%; top: 50%; width: 38%; height: 0; pointer-events: none; transform: translate(-50%, -50%); }
+.level { position: absolute; left: 50%; top: 50%; width: 38%; height: 0; pointer-events: none; transform: translate(-50%, -50%); transition: opacity 0.2s; }
 .level i { display: block; height: 1px; background: rgba(233, 228, 218, 0.7); transition: background 0.15s; }
 .level.flat i { background: #f3c64a; height: 1.5px; }
 .histo { position: absolute; left: 8px; top: 8px; width: 96px; height: 30px; opacity: 0.85; pointer-events: none; }
@@ -83,9 +87,6 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .bar-track i { display: block; height: 2px; width: 0; background: var(--red); transition: width 0.2s; }
 .hud .pill { margin-top: 8px; height: 28px; font-size: 12px; }
 
-.lenses { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; }
-.lenses button { width: 34px; height: 34px; border-radius: 50%; background: rgba(14, 14, 13, 0.6); font-size: 11px; color: var(--dim); }
-.lenses button.on { color: var(--fg); box-shadow: inset 0 0 0 1px var(--fg); }
 .vf-msg { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; text-align: center; color: var(--dim); }
 .vf-msg p { max-width: 300px; margin-bottom: 6px; }
 
@@ -119,7 +120,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 @media (orientation: landscape) and (max-height: 560px) {
   .cam { grid-template: "vf top" auto "vf ro" auto "vf dock" 1fr / 1fr 300px; padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left); }
   .vf { height: 100dvh; }
-  .top { padding-top: max(4px, var(--top)); }
+  .top { padding-top: max(10px, var(--top)); }
   .dock { display: flex; flex-direction: column; justify-content: flex-end; min-height: 0; overflow-y: auto; padding-bottom: max(6px, var(--bot)); }
   .ivl { margin: 0 8px 6px; }
   .ivl-row { height: 30px; }
@@ -128,7 +129,6 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
   .readout { padding: 0 12px 4px; }
 }
 
-video#video { position: absolute; width: 2px; height: 2px; opacity: 0.01; pointer-events: none; left: 0; top: 0; }
 
 /* sheets */
 .sheet {
@@ -178,7 +178,7 @@ input[type=checkbox][role=switch]:checked::after { transform: translateX(16px); 
 .set-link { display: block; padding: 12px 0; color: var(--fg); border-bottom: 1px solid var(--line); text-decoration: none; font-size: 14px; }
 
 /* gallery and viewer */
-.screen { position: fixed; inset: 0; z-index: 20; background: var(--bg); display: flex; flex-direction: column; padding: var(--top) 0 0; }
+.screen { position: fixed; inset: 0; z-index: 20; background: var(--bg); display: flex; flex-direction: column; padding: calc(var(--top) + 10px) 0 0; }
 .bar { display: flex; align-items: center; gap: 4px; padding: 4px 8px; min-height: 48px; }
 .bar h1 { font-size: 17px; font-weight: 500; margin-left: 2px; }
 .bar.bottom { justify-content: space-around; padding-bottom: calc(6px + var(--bot)); border-top: 1px solid var(--line); }
@@ -196,7 +196,8 @@ input[type=checkbox][role=switch]:checked::after { transform: translateX(16px); 
 .empty { padding: 80px 32px; text-align: center; color: var(--dim); }
 .empty b { display: block; color: var(--fg); font-weight: 500; margin-bottom: 6px; }
 .selbar { position: fixed; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 2px; padding: 6px 8px calc(6px + var(--bot)); background: var(--raise); border-top: 1px solid var(--line2); }
-.selbar .mono { flex: 1; padding-left: 8px; color: var(--dim); }
+.selbar { flex-wrap: wrap; justify-content: space-between; }
+.selbar .mono { flex-basis: 100%; padding: 2px 8px 0; color: var(--dim); }
 .selbar .txt { padding: 0 8px; font-size: 14px; }
 
 .viewer { z-index: 30; }
@@ -222,3 +223,58 @@ input[type=checkbox][role=switch]:checked::after { transform: translateX(16px); 
   padding: 9px 14px; border-radius: 6px; background: var(--fg); color: var(--bg); font-size: 13px; opacity: 0; pointer-events: none; transition: all 0.2s;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* zoom: tap a number, or drag sideways for the dial */
+.zoom { position: absolute; z-index: 3; bottom: 10px; left: 50%; transform: translateX(-50%); width: 250px; height: 56px; touch-action: none; display: flex; align-items: flex-end; justify-content: center; }
+.zoom-pills { display: flex; gap: 6px; padding: 4px; border-radius: 22px; background: rgba(14, 14, 13, 0.45); transition: opacity 0.15s, transform 0.15s; }
+.zoom-pills button { min-width: 34px; height: 34px; padding: 0 6px; border-radius: 17px; font-size: 11px; color: var(--dim); transition: color 0.15s, background 0.15s; }
+.zoom-pills button.on { color: #f3c64a; background: rgba(14, 14, 13, 0.6); font-size: 12px; }
+.zoom-dial { position: absolute; inset: 0; opacity: 0; pointer-events: none; transition: opacity 0.15s; text-align: center; }
+.zoom-dial b { display: block; font-size: 13px; font-weight: 500; color: #f3c64a; text-shadow: 0 0 8px #000; }
+.zoom-dial i {
+  position: absolute; left: 0; right: 0; bottom: 4px; height: 26px; border-radius: 13px; background-color: rgba(14, 14, 13, 0.6);
+  background-image: repeating-linear-gradient(90deg, rgba(233, 228, 218, 0.7) 0 1px, transparent 1px 9px), repeating-linear-gradient(90deg, #e9e4da 0 1.5px, transparent 1.5px 72px);
+  background-size: 100% 8px, 100% 14px; background-repeat: repeat-x; background-position-y: center;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 25%, #000 75%, transparent); mask-image: linear-gradient(90deg, transparent, #000 25%, #000 75%, transparent);
+}
+.zoom-dial i::after { content: ''; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: #f3c64a; }
+.zoom.dial .zoom-pills { opacity: 0; transform: scale(0.9); }
+.zoom.dial .zoom-dial { opacity: 1; }
+
+/* tap to meter, hold to lock */
+.focus { position: absolute; width: 76px; height: 76px; margin: -38px 0 0 -38px; color: #f3c64a; pointer-events: none; }
+.focus svg { width: 100%; height: 100%; stroke-width: 1.5; }
+.focus .ring { opacity: 0.55; }
+.focus .draw { stroke-width: 2.5; stroke-dasharray: 164; stroke-dashoffset: 164; transform: rotate(-90deg); transform-origin: 32px 32px; }
+.focus.holding .draw { transition: stroke-dashoffset 0.6s linear 0.05s; stroke-dashoffset: 0; }
+.focus.locked .ring { opacity: 1; }
+.focus.locked .draw { stroke-dashoffset: 0; }
+.focus.tap { animation: focusTap 0.9s ease-out forwards; }
+@keyframes focusTap { 0% { transform: scale(1.35); opacity: 0; } 15% { transform: scale(1); opacity: 1; } 70% { opacity: 1; } 100% { opacity: 0; } }
+.lockpill { position: absolute; z-index: 3; top: 10px; left: 50%; transform: translateX(-50%); padding: 4px 10px; border-radius: 4px; background: #f3c64a; color: #1b1a17; font-size: 11px; font-weight: 500; }
+
+/* motion: quick and small */
+button { transition: transform 0.08s, opacity 0.15s; }
+.txt:active, .ic:active, .pill:active, .cam-card:active, .seg button:active, .stp:active, .last:active { transform: scale(0.95); }
+.thumb img { transition: opacity 0.12s; }
+.thumb:active img { opacity: 0.7; }
+@media (prefers-reduced-motion: no-preference) {
+  .screen.in { animation: screenIn 0.22s cubic-bezier(0.2, 0.8, 0.2, 1); }
+  .screen.out { animation: screenOut 0.15s ease-in forwards; }
+  .viewer.in { animation: viewerIn 0.2s cubic-bezier(0.2, 0.8, 0.2, 1); }
+  .sheet[open]::backdrop { animation: fade 0.2s ease-out; }
+  .sheet.closing { animation: down 0.16s ease-in forwards; }
+  .sheet.closing::backdrop { animation: fade 0.16s ease-in reverse forwards; }
+  .editor:not([hidden]) { animation: up 0.2s cubic-bezier(0.2, 0.8, 0.2, 1); }
+  .ivl:not([hidden]), .hud:not([hidden]), .vf-msg:not([hidden]) { animation: pop 0.18s ease-out; }
+  .pane.on { animation: fade 0.15s ease-out; }
+  .stage.swap canvas { animation: fade 0.14s ease-out; }
+  #dim:not([hidden]) { animation: fade 0.3s ease-out; }
+  .cam-card.on .cam-photo { transition: outline-color 0.15s; }
+}
+@keyframes screenIn { from { transform: translateY(18px); opacity: 0; } }
+@keyframes screenOut { to { transform: translateY(12px); opacity: 0; } }
+@keyframes viewerIn { from { transform: scale(0.97); opacity: 0; } }
+@keyframes down { to { transform: translateY(48px); opacity: 0; } }
+@keyframes fade { from { opacity: 0; } }
+@keyframes pop { from { transform: translateY(6px); opacity: 0; } }

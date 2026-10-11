@@ -16,11 +16,14 @@ A free iPhone camera for interval shooting: set the phone down, have it take N p
 - **No build step.** ES modules served as-is. One vendored dependency (mp4-muxer) for timelapse export.
 - **Non-destructive looks.** The raw frame is stored untouched in IndexedDB along with a recipe (camera id, adjustments, effects, crop, random seed). Thumbnails are rendered at capture time. The full render happens in the viewer and on export, so any look can be changed later.
 - **One shader.** All 16 looks are parameter sets for a single WebGL2 fragment shader. Print borders and the date imprint are drawn on a 2D canvas afterwards.
-- **Encoding off the main thread.** `toBlob` on the main thread gets pushed to idle time while the viewfinder redraws, about a second per call. Two workers with `OffscreenCanvas.convertToBlob` keep up with 4 shots a second in testing, against roughly half missed before.
+- **One WebGL context.** The viewfinder draws to a visible WebGL canvas. Thumbnails, the viewer and exports render into a framebuffer on the same context and come back through `readPixels`. An earlier version used a second context and copied WebGL canvases into 2D ones, which gave black photos and a black viewfinder on iPhone.
+- **Capture path.** Frames are taken with `drawImage(video)` into a 2D canvas. `createImageBitmap(video)` failed on iOS. Safari encodes with `toBlob`. Chromium defers `toBlob` to idle time (about a second per call while the viewfinder runs), so there two workers with `OffscreenCanvas.convertToBlob` do it.
+- **Zoom.** On iPhones with an ultra wide, the back camera is the virtual multi-lens device, so a single zoom value covers 0.5× through telephoto and the dial works like the Camera app.
+- **Tap to meter.** Safari doesn't offer a focus or metering point, so a tap reads the brightness under the finger from the viewfinder and adjusts exposure compensation (or the image itself) until that spot sits near mid-grey. Holding locks it.
 - **Darkroom look.** Near-black, warm off-white text, one red accent for recording and selection, IBM Plex Mono for readouts. Camera photos in the picker carry the color.
 
 ## Not done
 
-- Tap to focus and manual shutter/ISO: Safari doesn't expose them.
+- Focus point, manual focus, shutter speed and ISO: Safari doesn't expose them. A focus point is used if a browser offers one.
 - Pinch zoom in the photo viewer.
 - A virtualized gallery grid. Thousands of thumbnails load lazily but all get DOM nodes.
